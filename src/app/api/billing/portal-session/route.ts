@@ -12,6 +12,6 @@ export async function POST(req: NextRequest) {
 
   console.log("[MOCK STRIPE] portal-session called");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.RAILWAY_STATIC_URL ?? "http://localhost:3000";
   return NextResponse.json({ url: `${appUrl}/dashboard/billing` });
 }

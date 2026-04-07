@@ -1,12 +1,10 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache openssl
-
 WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source
 COPY . .
@@ -17,8 +15,8 @@ RUN npx prisma generate
 # Build Next.js
 RUN npm run build
 
-# Expose port
-EXPOSE 3000
+# Expose port — Railway assigns PORT dynamically at runtime
+EXPOSE ${PORT:-3000}
 
-# Start with seed check + Next.js
+# Start Next.js (PORT is injected by Railway at runtime)
 CMD ["npm", "start"]

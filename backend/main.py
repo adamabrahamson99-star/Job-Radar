@@ -48,12 +48,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow Next.js frontend
-allowed_origins = [
-    os.getenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000"),
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+# CORS — origins are driven entirely by environment variables.
+# NEXT_PUBLIC_APP_URL must be set on Railway (e.g. https://your-app.up.railway.app).
+# CORS_EXTRA_ORIGINS can be a comma-separated list for additional allowed origins.
+_app_url = os.getenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+_extra = [o.strip() for o in os.getenv("CORS_EXTRA_ORIGINS", "").split(",") if o.strip()]
+allowed_origins = list({_app_url, "http://localhost:3000"} | set(_extra))
 
 app.add_middleware(
     CORSMiddleware,

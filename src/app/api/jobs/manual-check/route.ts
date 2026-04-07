@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   // Try FastAPI backend — gracefully no-op if not running
   let checkResult: any = { ok: true, new_postings: 0 };
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"; // set NEXT_PUBLIC_API_URL in Railway env vars
 
   try {
     const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {

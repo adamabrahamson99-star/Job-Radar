@@ -13,6 +13,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   console.log("[MOCK STRIPE] create-checkout-session called with price_id:", body.price_id);
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.RAILWAY_STATIC_URL ?? "http://localhost:3000";
   return NextResponse.json({ url: `${appUrl}/dashboard/billing?upgraded=true` });
 }

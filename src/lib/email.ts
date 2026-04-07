@@ -3,7 +3,7 @@ import { Resend } from "resend";
 export const resend = new Resend(process.env.RESEND_API_KEY ?? "");
 
 const FROM = process.env.EMAIL_FROM ?? "Radar <notifications@radar.app>";
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? process.env.RAILWAY_STATIC_URL ?? "http://localhost:3000";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 
