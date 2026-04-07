@@ -1,0 +1,199 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubscriptionTier {
+  FREE
+  STARTER
+  PRO
+  UNLIMITED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  CANCELED
+  PAST_DUE
+}
+
+enum ExperienceLevel {
+  ENTRY
+  MID
+  SENIOR
+  STAFF
+}
+
+enum JobSource {
+  WATCHLIST
+  GREENHOUSE
+  LEVER
+  ASHBY
+}
+
+enum JobStatus {
+  NEW
+  SAVED
+  APPLIED
+  NOT_INTERESTED
+}
+
+enum NotificationType {
+  NEW_MATCH
+  WEEKLY_DIGEST
+  DAILY_DIGEST
+}
+
+enum AtsSource {
+  GREENHOUSE
+  LEVER
+  ASHBY
+}
+
+model User {
+  id                     String             @id @default(uuid())
+  email                  String             @unique
+  password_hash          String
+  full_name              String
+  created_at             DateTime           @default(now())
+  updated_at             DateTime           @updatedAt
+  stripe_customer_id     String?
+  subscription_tier      SubscriptionTier   @default(FREE)
+  subscription_status    SubscriptionStatus @default(ACTIVE)
+  trial_ends_at          DateTime?
+  manual_checks_this_month Int               @default(0)
+  manual_checks_reset_at   DateTime          @default(now())
+  onboarding_completed   Boolean            @default(false)
+
+  candidate_profile  CandidateProfile?
+  companies          Company[]
+  job_postings       JobPosting[]
+  notifications      Notification[]
+  discovery_settings          DiscoverySettings?
+  notification_preferences    NotificationPreferences?
+
+  @@map("users")
+}
+
+model CandidateProfile {
+  id                  String          @id @default(uuid())
+  user_id             String          @unique
+  user                User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  raw_resume_text     String?
+  resume_file_path    String?
+  experience_level    ExperienceLevel @default(ENTRY)
+  years_of_experience Int             @default(0)
+  skills              String[]
+  target_roles        String[]
+  education           Json            @default("[]")
+  high_value_skills   String[]
+  high_value_titles   String[]
+  preferred_locations String[]
+  parsed_at           DateTime?
+  updated_at          DateTime        @updatedAt
+
+  @@map("candidate_profiles")
+}
+
+model Company {
+  id              String     @id @default(uuid())
+  user_id         String
+  user            User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company_name    String
+  career_page_url String
+  is_active       Boolean    @default(true)
+  last_checked_at DateTime?
+  posting_count   Int        @default(0)
+  created_at      DateTime   @default(now())
+
+  job_postings JobPosting[]
+
+  @@map("companies")
+}
+
+model JobPosting {
+  id                      String           @id @default(uuid())
+  user_id                 String
+  user                    User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company_id              String?
+  company                 Company?         @relation(fields: [company_id], references: [id])
+  external_id             String
+  title                   String
+  company_name            String
+  location                String
+  salary_min              Int?
+  salary_max              Int?
+  salary_currency         String?
+  salary_raw              String?
+  description_raw         String
+  description_summary     String?
+  match_score             Int              @default(0)
+  match_explanation       String?
+  experience_level        ExperienceLevel?
+  role_category           String?
+  apply_url               String
+  source                  JobSource
+  status                  JobStatus        @default(NEW)
+  is_new_since_last_visit Boolean          @default(true)
+  posted_at               DateTime?
+  first_seen_at           DateTime         @default(now())
+  last_verified_at        DateTime         @default(now())
+  is_active               Boolean          @default(true)
+  created_at              DateTime         @default(now())
+
+  @@map("job_postings")
+}
+
+model AtsCompany {
+  id           String    @id @default(uuid())
+  source       AtsSource
+  company_slug String
+  company_name String
+  is_active    Boolean   @default(true)
+
+  @@unique([source, company_slug])
+  @@map("ats_companies")
+}
+
+model DiscoverySettings {
+  id                   String   @id @default(uuid())
+  user_id              String   @unique
+  user                 User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  greenhouse_enabled   Boolean  @default(false)
+  lever_enabled        Boolean  @default(false)
+  ashby_enabled        Boolean  @default(false)
+  location_keywords    String[]
+  role_keywords        String[]
+  updated_at           DateTime @updatedAt
+
+  @@map("discovery_settings")
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  user_id     String
+  user        User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  type        NotificationType
+  sent_at     DateTime         @default(now())
+  posting_ids String[]
+
+  @@map("notifications")
+}
+
+model NotificationPreferences {
+  id                       String   @id @default(uuid())
+  user_id                  String   @unique
+  user                     User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  email_enabled            Boolean  @default(true)
+  instant_alert_threshold  Int      @default(75)
+  updated_at               DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
