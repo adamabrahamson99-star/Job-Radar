@@ -70,10 +70,4 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 
 @app.get("/health")
 async def health():
-    from scheduler import get_scheduler
-    try:
-        s = get_scheduler()
-        job_count = len(s.get_jobs())
-    except Exception:
-        job_count = 0
-    return {"status": "ok", "service": "radar-api", "scheduled_jobs": job_count}
+    return {"status": "ok"}
