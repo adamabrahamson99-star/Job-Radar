@@ -1,16 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-/**
- * GET/POST /api/force-logout
- *
- * Clears all NextAuth session cookies, forcing the user back to the login page.
- * Useful during development when wiping the Railway DB.
- *
- * Usage: paste this in your browser:
- *   https://job-radar-production-9386.up.railway.app/api/force-logout
- */
-
 function clearSessionCookies() {
   const cookieStore = cookies();
   const sessionCookieNames = [
@@ -21,7 +11,6 @@ function clearSessionCookies() {
     "next-auth.callback-url",
     "__Secure-next-auth.callback-url",
   ];
-
   for (const name of sessionCookieNames) {
     cookieStore.delete(name);
   }
