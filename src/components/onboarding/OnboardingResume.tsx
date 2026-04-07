@@ -41,6 +41,7 @@ export function OnboardingResume({ onNext, onSkip, onUploaded }: OnboardingResum
 
     try {
       setUploadState("parsing");
+      // Call the Next.js proxy route — auth is handled server-side
       const res = await fetch("/api/profile/upload-resume", {
         method: "POST",
         body: formData,
@@ -48,7 +49,7 @@ export function OnboardingResume({ onNext, onSkip, onUploaded }: OnboardingResum
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "Upload failed");
+        throw new Error(data.detail || data.error || "Upload failed");
       }
 
       setUploadState("success");
