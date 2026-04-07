@@ -41,17 +41,10 @@ export function OnboardingResume({ onNext, onSkip, onUploaded }: OnboardingResum
 
     try {
       setUploadState("parsing");
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/profile/upload-resume`,
-        {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-          headers: {
-            // Pass session token from cookie — FastAPI will validate it
-          },
-        }
-      );
+      const res = await fetch("/api/profile/upload-resume", {
+        method: "POST",
+        body: formData,
+      });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

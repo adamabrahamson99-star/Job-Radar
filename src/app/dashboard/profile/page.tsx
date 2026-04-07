@@ -219,10 +219,10 @@ export default function ProfilePage() {
 
     try {
       setUploadState("parsing");
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/profile/upload-resume`,
-        { method: "POST", body: formData, credentials: "include" }
-      );
+      const res = await fetch("/api/profile/upload-resume", {
+        method: "POST",
+        body: formData,
+      });
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));

@@ -63,18 +63,24 @@ export async function POST(req: NextRequest) {
   let checkResult: any = { ok: true, new_postings: 0 };
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"; // set NEXT_PUBLIC_API_URL in Railway env vars
 
-  try {
-    const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: req.headers.get("cookie") || "" },
-      body: JSON.stringify({ user_id: userId }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (resp.ok) checkResult = await resp.json();
-  } catch {
-    // FastAPI not running — return mock success
-    checkResult = { ok: true, new_postings: 3 };
-  }
+  const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
+
+try {
+  const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-User-ID": userId,
+      "X-Internal-Secret": internalSecret,
+    },
+    body: JSON.stringify({ user_id: userId }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (resp.ok) checkResult = await resp.json();
+} catch {
+  // FastAPI not running — return mock success
+  checkResult = { ok: true, new_postings: 3 };
+}
 
   // Fetch fresh remaining count for FREE tier
   const updatedUser = tier === "FREE"
