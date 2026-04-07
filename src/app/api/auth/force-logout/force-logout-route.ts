@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 /**
- * POST /api/auth/force-logout
+ * GET/POST /api/force-logout
  *
  * Clears all NextAuth session cookies, forcing the user back to the login page.
- * Useful during development when wiping the Railway DB — stale JWTs will
- * keep redirecting to the dashboard even though the user no longer exists.
+ * Useful during development when wiping the Railway DB.
  *
- * Also accessible via GET so you can just paste the URL in your browser:
- *   https://your-app.up.railway.app/api/auth/force-logout
+ * Usage: paste this in your browser:
+ *   https://job-radar-production-9386.up.railway.app/api/force-logout
  */
 
 function clearSessionCookies() {
@@ -30,11 +29,10 @@ function clearSessionCookies() {
 
 export async function POST(req: NextRequest) {
   clearSessionCookies();
-  return NextResponse.json({ ok: true, message: "All sessions cleared. Redirecting to login." });
+  return NextResponse.json({ ok: true, message: "All sessions cleared." });
 }
 
 export async function GET(req: NextRequest) {
   clearSessionCookies();
-  // Redirect to login page after clearing
   return NextResponse.redirect(new URL("/auth/login", req.url));
 }
