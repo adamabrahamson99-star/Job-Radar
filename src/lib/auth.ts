@@ -40,13 +40,17 @@ export const authOptions: NextAuthOptions = {
           name: user.full_name,
           subscriptionTier: user.subscription_tier,
           onboardingCompleted: user.onboarding_completed,
+          // Pass rememberMe through so the jwt callback can read it
+          rememberMe: credentials.rememberMe === "true",
         };
       },
     }),
   ],
   session: {
     strategy: "jwt",
-    maxAge: 30 * 24 * 60 * 60, // 30 days default
+    // Default: short session (browser session — expires when browser closes)
+    // Remember Me extends this to 30 days via the jwt callback below
+    maxAge: 24 * 60 * 60, // 1 day default (fallback if rememberMe is not set)
   },
   pages: {
     signIn: "/auth/login",
@@ -58,21 +62,44 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.subscriptionTier = (user as { subscriptionTier: string }).subscriptionTier;
         token.onboardingCompleted = (user as { onboardingCompleted: boolean }).onboardingCompleted;
+
+        // Set token expiry based on Remember Me
+        const rememberMe = (user as any).rememberMe;
+        if (rememberMe) {
+          // 30 days from now
+          token.exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+        } else {
+          // 1 day from now — user must log in again tomorrow
+          token.exp = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+        }
       }
-      // Refresh onboarding status on every token refresh
-      if (trigger === "update" || !token.onboardingCompleted) {
+
+      // On every token refresh, verify the user still exists in the database
+      if (token.id) {
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
           select: { onboarding_completed: true, subscription_tier: true },
         });
-        if (dbUser) {
-          token.onboardingCompleted = dbUser.onboarding_completed;
-          token.subscriptionTier = dbUser.subscription_tier;
+
+        if (!dbUser) {
+          // User was deleted from the database — invalidate this token
+          // Returning an empty object forces NextAuth to treat the session as expired
+          return {} as any;
         }
+
+        // Sync latest values from DB
+        token.onboardingCompleted = dbUser.onboarding_completed;
+        token.subscriptionTier = dbUser.subscription_tier;
       }
+
       return token;
     },
     async session({ session, token }) {
+      // If token was invalidated (user deleted), return empty session
+      if (!token.id) {
+        return {} as any;
+      }
+
       if (session.user) {
         (session.user as { id: string; subscriptionTier: string; onboardingCompleted: boolean }).id = token.id;
         (session.user as { id: string; subscriptionTier: string; onboardingCompleted: boolean }).subscriptionTier = token.subscriptionTier as string;
