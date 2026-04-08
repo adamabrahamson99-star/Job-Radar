@@ -299,7 +299,9 @@ def seed_database():
         # ── Job postings ──────────────────────────────────────────────────────
         for p in SEED_POSTINGS:
             cid = company_ids.get(p["company"])
-            apply_url = f"{p['url']}/{p['title'].lower().replace(' ', '-')}-demo"
+            # MOCK MODE: Use the company's real careers page URL so "View & Apply"
+            # links to a real page. Individual job URLs will come from real scraping.
+            apply_url = p["url"]
             fp = make_fp(p["company"], p["title"], apply_url)
             posted_at = datetime.now(timezone.utc) - timedelta(days=p["days_ago"])
             description = DESCRIPTION_TEMPLATE.format(title=p["title"], company=p["company"])

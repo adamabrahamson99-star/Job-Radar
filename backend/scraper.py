@@ -66,7 +66,10 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
         postings.append({
             "title": title,
             "company_name": company_name,
-            "apply_url": f"{url.rstrip('/')}/{slug}-{random.randint(1000, 9999)}",
+            # MOCK MODE: No real job URLs available — use the careers page URL so
+            # "View & Apply" links to a real page. Real Playwright scraping will
+            # extract the actual per-job URL from each listing.
+            "apply_url": url,
             "location": location,
             "description": (
                 f"We are looking for a talented {title} to join {company_name}. "
