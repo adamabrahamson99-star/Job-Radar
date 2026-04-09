@@ -1,102 +1,252 @@
 """
 Radar — ATS API clients.
-MOCK MODE: All ATS endpoints replaced with fake data generators.
-Replace fetch_greenhouse / fetch_lever / fetch_ashby with real HTTP calls
-when you're ready to connect live ATS data.
+Real implementations for Greenhouse, Lever, and Ashby public job board APIs.
+All three APIs are publicly accessible — no authentication required.
 """
 
 from __future__ import annotations
 
-import random
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timezone
+
+import httpx
 
 
-_ATS_TITLES = [
-    "Senior Data Analyst",
-    "Software Engineer II",
-    "Staff Engineer",
-    "Product Manager",
-    "Data Engineer",
-    "Frontend Developer",
-    "DevOps Engineer",
-    "ML Research Engineer",
-    "Full Stack Engineer",
-    "Business Intelligence Developer",
-]
+# ─── HTML stripping ───────────────────────────────────────────────────────────
 
-_ATS_LOCATIONS = [
-    "Remote",
-    "San Francisco, CA",
-    "New York, NY",
-    "Austin, TX",
-    "Seattle, WA",
-    "Remote (US)",
-]
-
-_SALARIES = [
-    ("$100,000 – $130,000", 100000, 130000, "USD"),
-    ("$90,000 – $115,000", 90000, 115000, "USD"),
-    (None, None, None, None),
-    (None, None, None, None),
-    ("$120,000 – $150,000", 120000, 150000, "USD"),
-]
+def _strip_html(html: str) -> str:
+    """Remove HTML tags and collapse whitespace."""
+    if not html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&#\d+;", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
-def _days_ago(n: int) -> str:
-    dt = datetime.now(timezone.utc) - timedelta(days=n)
-    return dt.isoformat()
+def _parse_iso(date_str: str | None) -> str | None:
+    """Normalise an ISO date string for storage."""
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(
+            date_str.replace("Z", "+00:00")
+        ).isoformat()
+    except Exception:
+        return None
 
 
-def _make_postings(company_name: str, source_domain: str, count: int = 5) -> list[dict]:
-    titles = random.sample(_ATS_TITLES, min(count, len(_ATS_TITLES)))
-    result = []
-    for title in titles:
-        location = random.choice(_ATS_LOCATIONS)
-        sal_raw, sal_min, sal_max, sal_cur = random.choice(_SALARIES)
-        slug = title.lower().replace(" ", "-")
-        job_id = random.randint(10000, 99999)
-        result.append({
-            "title": title,
-            "company_name": company_name,
-            "apply_url": f"https://{source_domain}/jobs/{slug}-{job_id}",
-            "location": location,
-            "description": (
-                f"Join {company_name} as a {title}. We are looking for a highly motivated "
-                f"individual to contribute to our growing team. This is a {location} position "
-                f"requiring strong analytical and communication skills. Python, SQL, and cloud "
-                f"experience are valued. We offer competitive compensation and benefits."
-            ),
-            "salary_raw": sal_raw,
-            "salary_min": sal_min,
-            "salary_max": sal_max,
-            "salary_currency": sal_cur,
-            "posted_at": _days_ago(random.randint(1, 14)),
-        })
-    return result
+def _ms_epoch_to_iso(ms: int | None) -> str | None:
+    """Convert a millisecond epoch timestamp (Lever) to ISO string."""
+    if not ms:
+        return None
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
 
+
+# ─── Greenhouse ───────────────────────────────────────────────────────────────
 
 async def fetch_greenhouse(slug: str, company_name: str) -> list[dict]:
-    """MOCK: Returns 5 fake Greenhouse postings."""
-    postings = _make_postings(company_name, f"boards.greenhouse.io/{slug}")
-    print(f"[MOCK GREENHOUSE] {len(postings)} postings for {company_name}")
-    return postings
+    """
+    Fetch live job listings from Greenhouse's public board API.
+    Docs: https://developers.greenhouse.io/job-board.html
+    """
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"User-Agent": "Radar-JobBoard/1.0"})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        print(f"[GREENHOUSE ERROR] {company_name} ({slug}): HTTP {e.response.status_code}")
+        return []
+    except Exception as e:
+        print(f"[GREENHOUSE ERROR] {company_name} ({slug}): {e}")
+        return []
 
+    results = []
+    for job in data.get("jobs", []):
+        title = job.get("title", "").strip()
+        if not title:
+            continue
+
+        location = (job.get("location") or {}).get("name") or "Not specified"
+        apply_url = job.get("absolute_url") or f"https://boards.greenhouse.io/{slug}"
+        description = _strip_html(job.get("content", ""))
+        posted_at = _parse_iso(job.get("updated_at"))
+
+        results.append({
+            "title": title,
+            "company_name": company_name,
+            "apply_url": apply_url,
+            "location": location,
+            "description": description or f"{title} at {company_name}.",
+            "salary_raw": None,
+            "salary_min": None,
+            "salary_max": None,
+            "salary_currency": None,
+            "posted_at": posted_at,
+        })
+
+    print(f"[GREENHOUSE] {company_name}: {len(results)} postings")
+    return results
+
+
+# ─── Lever ────────────────────────────────────────────────────────────────────
 
 async def fetch_lever(slug: str, company_name: str) -> list[dict]:
-    """MOCK: Returns 5 fake Lever postings."""
-    postings = _make_postings(company_name, f"jobs.lever.co/{slug}")
-    print(f"[MOCK LEVER] {len(postings)} postings for {company_name}")
-    return postings
+    """
+    Fetch live job listings from Lever's public postings API.
+    Docs: https://hire.lever.co/developer/postings
+    """
+    url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"User-Agent": "Radar-JobBoard/1.0"})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        print(f"[LEVER ERROR] {company_name} ({slug}): HTTP {e.response.status_code}")
+        return []
+    except Exception as e:
+        print(f"[LEVER ERROR] {company_name} ({slug}): {e}")
+        return []
 
+    results = []
+    for job in data:
+        title = job.get("text", "").strip()
+        if not title:
+            continue
+
+        categories = job.get("categories") or {}
+        location = categories.get("location") or categories.get("allLocations") or "Not specified"
+        if isinstance(location, list):
+            location = ", ".join(location)
+
+        apply_url = job.get("hostedUrl") or f"https://jobs.lever.co/{slug}"
+        description = _strip_html(
+            job.get("description", "") + " " + job.get("descriptionPlain", "")
+        )
+        posted_at = _ms_epoch_to_iso(job.get("createdAt"))
+
+        results.append({
+            "title": title,
+            "company_name": company_name,
+            "apply_url": apply_url,
+            "location": location,
+            "description": description or f"{title} at {company_name}.",
+            "salary_raw": None,
+            "salary_min": None,
+            "salary_max": None,
+            "salary_currency": None,
+            "posted_at": posted_at,
+        })
+
+    print(f"[LEVER] {company_name}: {len(results)} postings")
+    return results
+
+
+# ─── Ashby ────────────────────────────────────────────────────────────────────
 
 async def fetch_ashby(slug: str, company_name: str) -> list[dict]:
-    """MOCK: Returns 5 fake Ashby postings."""
-    postings = _make_postings(company_name, f"jobs.ashbyhq.com/{slug}")
-    print(f"[MOCK ASHBY] {len(postings)} postings for {company_name}")
-    return postings
+    """
+    Fetch live job listings from Ashby's public GraphQL API.
+    """
+    gql_url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    query = """
+    query JobBoard($organizationHostedJobsPageName: String!) {
+      jobBoard: jobBoardWithTeams(
+        organizationHostedJobsPageName: $organizationHostedJobsPageName
+      ) {
+        jobPostings {
+          id
+          title
+          isListed
+          locationName
+          externalLink
+          descriptionHtml
+          publishedDate
+        }
+      }
+    }
+    """
+    payload = {
+        "operationName": "JobBoard",
+        "query": query,
+        "variables": {"organizationHostedJobsPageName": slug},
+    }
 
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                gql_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Radar-JobBoard/1.0",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        print(f"[ASHBY ERROR] {company_name} ({slug}): HTTP {e.response.status_code}")
+        return []
+    except Exception as e:
+        print(f"[ASHBY ERROR] {company_name} ({slug}): {e}")
+        return []
+
+    postings = (
+        (data.get("data") or {})
+        .get("jobBoard") or {}
+    ).get("jobPostings") or []
+
+    results = []
+    for job in postings:
+        # Skip unlisted postings
+        if not job.get("isListed", True):
+            continue
+
+        title = job.get("title", "").strip()
+        if not title:
+            continue
+
+        job_id = job.get("id", "")
+        # Prefer the externalLink if provided, otherwise build the Ashby board URL
+        apply_url = (
+            job.get("externalLink")
+            or f"https://jobs.ashbyhq.com/{slug}/{job_id}"
+        )
+        location = job.get("locationName") or "Not specified"
+        description = _strip_html(job.get("descriptionHtml", ""))
+        posted_at = _parse_iso(job.get("publishedDate"))
+
+        results.append({
+            "title": title,
+            "company_name": company_name,
+            "apply_url": apply_url,
+            "location": location,
+            "description": description or f"{title} at {company_name}.",
+            "salary_raw": None,
+            "salary_min": None,
+            "salary_max": None,
+            "salary_currency": None,
+            "posted_at": posted_at,
+        })
+
+    print(f"[ASHBY] {company_name}: {len(results)} postings")
+    return results
+
+
+# ─── Keyword filter ───────────────────────────────────────────────────────────
 
 def _matches_keywords(job: dict, location_keywords: list[str], role_keywords: list[str]) -> bool:
+    """Filter a job against user's location and role keyword preferences."""
     if not location_keywords and not role_keywords:
         return True
     loc_lower = job.get("location", "").lower()
@@ -107,8 +257,10 @@ def _matches_keywords(job: dict, location_keywords: list[str], role_keywords: li
     for kw in role_keywords:
         if kw.lower() in title_lower:
             return True
-    return True  # In mock mode: always include all postings
+    return False
 
+
+# ─── Discovery orchestrator ───────────────────────────────────────────────────
 
 async def run_ats_discovery(
     db,
@@ -120,7 +272,7 @@ async def run_ats_discovery(
     role_keywords: list[str],
     profile: dict,
 ) -> int:
-    """Run ATS discovery (MOCK). Returns count of new jobs ingested."""
+    """Run ATS discovery with real API calls. Returns count of new jobs ingested."""
     from sqlalchemy import text
     from pipeline import ingest_posting
 
@@ -134,8 +286,10 @@ async def run_ats_discovery(
             )
         ).fetchall()
         for row in rows:
-            for j in await fetch_greenhouse(row.company_slug, row.company_name):
-                all_jobs.append(("GREENHOUSE", j))
+            jobs = await fetch_greenhouse(row.company_slug, row.company_name)
+            for j in jobs:
+                if _matches_keywords(j, location_keywords, role_keywords):
+                    all_jobs.append(("GREENHOUSE", j))
 
     if lever_enabled:
         rows = db.execute(
@@ -145,8 +299,10 @@ async def run_ats_discovery(
             )
         ).fetchall()
         for row in rows:
-            for j in await fetch_lever(row.company_slug, row.company_name):
-                all_jobs.append(("LEVER", j))
+            jobs = await fetch_lever(row.company_slug, row.company_name)
+            for j in jobs:
+                if _matches_keywords(j, location_keywords, role_keywords):
+                    all_jobs.append(("LEVER", j))
 
     if ashby_enabled:
         rows = db.execute(
@@ -156,8 +312,10 @@ async def run_ats_discovery(
             )
         ).fetchall()
         for row in rows:
-            for j in await fetch_ashby(row.company_slug, row.company_name):
-                all_jobs.append(("ASHBY", j))
+            jobs = await fetch_ashby(row.company_slug, row.company_name)
+            for j in jobs:
+                if _matches_keywords(j, location_keywords, role_keywords):
+                    all_jobs.append(("ASHBY", j))
 
     new_count = 0
     for source, job in all_jobs:

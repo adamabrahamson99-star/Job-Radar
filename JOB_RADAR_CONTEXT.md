@@ -85,25 +85,66 @@ All defined in `.env.example`:
 
 ## Current Mock State
 
-All external services are currently mocked. No real API calls are made.
+Some services are now live. The table below reflects the current state.
 
-| Service | Mock Location | What It Returns |
+| Service | Status | File | Notes |
+|---|---|---|---|
+| **Claude AI** | ❌ Mock | `backend/pipeline.py` | Hardcoded profile parse, random match score (55–97), fixed summary/explanation, cycling role categories |
+| **Playwright scraper** | ✅ Live | `backend/scraper.py` | Real Playwright implementation — see scraper details below |
+| **Greenhouse API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `boards-api.greenhouse.io` |
+| **Lever API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `api.lever.co` |
+| **Ashby API** | ✅ Live | `backend/ats_clients.py` | Real GraphQL calls to `jobs.ashbyhq.com/api/non-user-graphql` |
+| **Resend email** | ❌ Mock | `backend/email_client.py` | Logs to console, no emails sent |
+| **APScheduler** | ❌ Mock | `backend/scheduler.py` | Stub only, no cron jobs run |
+| **Stripe** | ❌ Mock | `src/app/api/billing/*.ts` | Checkout redirects to `?upgraded=true`, webhook is a no-op |
+
+### Playwright Scraper — How It Works
+
+`backend/scraper.py` is a real Playwright implementation. It uses the following location extraction strategy (in priority order):
+
+1. **JSON-LD on the listing page** — Parses all `<script type="application/ld+json">` blocks on the career page for `JobPosting` schema entries. Free — no extra requests.
+2. **DOM parent heuristic** — Inspects the HTML parent container of each job link for city/state patterns or remote keywords.
+3. **Async concurrent httpx fetches** — For any jobs still missing location, fires up to 5 concurrent HTTP requests to individual job pages. Each page is parsed for JSON-LD, `<title>` tag patterns, and common location CSS classes.
+4. **Fallback** — Returns `"See posting"` if nothing is found.
+
+Additional features:
+- Dismisses cookie banners / consent overlays automatically
+- Scrolls incrementally to trigger lazy-loaded job listings
+- Detects iframe-based career pages (Workday, iCIMS, Taleo, SuccessFactors)
+- Caps results at 50 postings per company
+- Uses a realistic Chrome user-agent to avoid bot detection
+
+**Railway build requirement:** `backend/railway.toml` includes `buildCommand = "pip install -r requirements.txt && playwright install chromium --with-deps"` to install the Chromium browser binary during deployment.
+
+### ATS API Clients — How They Work
+
+`backend/ats_clients.py` makes real HTTP calls to public job board APIs (no auth required):
+
+- **Greenhouse:** `GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true` — returns `absolute_url` (per-job link), location, description HTML, and `updated_at`
+- **Lever:** `GET https://api.lever.co/v0/postings/{slug}?mode=json` — returns `hostedUrl` (per-job link), categories (location/team), description, and `createdAt` epoch ms
+- **Ashby:** `POST https://jobs.ashbyhq.com/api/non-user-graphql` with a GraphQL query — returns `externalLink` (per-job link), `locationName`, `descriptionHtml`, and `publishedDate`
+
+All three strip HTML from descriptions and normalise date formats before returning.
+
+### apply_url Behaviour
+
+The `apply_url` field stored in `job_postings` is always a direct link to the specific job posting page — not the general careers page. This is what the "View & Apply" button links to in the dashboard.
+
+- **Watchlist companies (Playwright):** `apply_url` = the exact href extracted from each job listing link on the career page
+- **Greenhouse:** `apply_url` = `absolute_url` from the API (e.g. `https://boards.greenhouse.io/company/jobs/12345`)
+- **Lever:** `apply_url` = `hostedUrl` from the API (e.g. `https://jobs.lever.co/company/uuid`)
+- **Ashby:** `apply_url` = `externalLink` from the API, or `https://jobs.ashbyhq.com/{slug}/{id}` if no external link
+
+**Seed data note:** `backend/seed_demo.py` uses `p["url"]` (the company's careers page root) as `apply_url` for demo postings since there are no real job IDs to link to. This is intentional for demo mode only.
+
+### Switching Remaining Services to Live Mode
+
+| Step | Service | Action |
 |---|---|---|
-| **Claude AI** | `backend/pipeline.py` | Hardcoded profile parse, random match score (55–97), fixed summary/explanation, cycling role categories |
-| **Playwright scraper** | `backend/scraper.py` | 3 fake job postings per company with random titles/locations/salaries |
-| **Greenhouse / Lever / Ashby** | `backend/ats_clients.py` | 5 fake postings per ATS source |
-| **Resend email** | `backend/email_client.py` | `console.log("[MOCK EMAIL]", ...)` — no emails sent |
-| **APScheduler** | `backend/scheduler.py` | Stub scheduler, no cron jobs — all tiers can manually trigger checks |
-| **Stripe** | `src/app/api/billing/*.ts` | Checkout returns redirect to `?upgraded=true`, portal returns redirect to billing page, webhook is a no-op |
-
-### Switching to Live Mode
-Set the corresponding API key in env vars and replace the mock file with the real implementation:
-1. Claude → set `ANTHROPIC_API_KEY`, replace functions in `backend/pipeline.py`
-2. Stripe → set all `STRIPE_*` vars, replace billing route files
-3. Resend → set `RESEND_API_KEY`, replace `_send()` in `backend/email_client.py`
-4. Playwright → replace `backend/scraper.py` with real Playwright implementation
-5. ATS APIs → replace `backend/ats_clients.py` with real HTTP calls
-6. Scheduler → replace `backend/scheduler.py` with full APScheduler bootstrap
+| 1 | Claude AI | Set `ANTHROPIC_API_KEY`, replace `parse_job_description`, `score_match`, and `generate_summary` in `backend/pipeline.py` with real Claude API calls. Consider combining all three into one call for efficiency. |
+| 2 | Stripe | Set all `STRIPE_*` env vars, replace mock billing route files in `src/app/api/billing/` |
+| 3 | Resend | Set `RESEND_API_KEY`, replace `_send()` mock in `backend/email_client.py` |
+| 4 | Scheduler | Replace `backend/scheduler.py` stub with full APScheduler bootstrap (Mon+Thu for Starter, daily for Pro, every 6h for Unlimited). Stagger checks across a 2h window to avoid simultaneous Playwright load. |
 
 ---
 
@@ -247,16 +288,16 @@ backend/
 ├── database.py                # SQLAlchemy engine (lazy init from DATABASE_URL)
 ├── auth_utils.py              # Request auth: internal secret headers OR NextAuth JWT
 ├── pipeline.py                # MOCK: fingerprinting, dedup, AI scoring, summary
-├── scraper.py                 # MOCK: 3 fake postings per company
-├── ats_clients.py             # MOCK: 5 fake postings per ATS source
+├── scraper.py                 # LIVE: Playwright career page scraper with JSON-LD + httpx location enrichment
+├── ats_clients.py             # LIVE: Real Greenhouse / Lever / Ashby public API calls
 ├── email_client.py            # MOCK: console.log instead of Resend
 ├── scheduler.py               # MOCK: stub scheduler, no cron jobs
 ├── jobs_runner.py             # check_user_jobs() — master orchestrator
 ├── seed_demo.py               # Demo data seeder (user, companies, 20 postings)
 ├── seed_ats.py                # ATS companies seeder (105 companies)
 ├── ats_seed_data.py           # ATS company list data
-├── requirements.txt           # Python dependencies
-├── railway.toml               # Railway deploy config for FastAPI
+├── requirements.txt           # Python dependencies (includes playwright==1.58.0, httpx==0.27.2)
+├── railway.toml               # Railway deploy config — buildCommand installs Playwright Chromium
 └── routers/
     ├── __init__.py
     ├── profile.py             # POST /api/profile/upload-resume, GET /api/profile/me
@@ -330,11 +371,23 @@ Seed includes:
 ## Known Issues / TODO
 
 1. `backend/auth_utils.py` needs the updated version with `X-Internal-User-ID` / `X-Internal-Secret` support (fix pending deploy)
-2. All external services are mocked — see "Switching to Live Mode" section above
+2. Claude AI, Resend, APScheduler, and Stripe are still mocked — see "Switching Remaining Services to Live Mode" above
 3. The FastAPI backend's `seed_demo.py` auto-seed may fail if the DB schema hasn't been pushed yet (Prisma migration runs on Next.js service, not FastAPI)
 4. Mobile responsive layout is basic — tablet (768px+) is functional, phone is stretch goal
 5. No error boundary component yet (planned)
-6. Playwright scraper mock doesn't test real pagination or cookie dismissal logic
+6. Playwright scraper location extraction falls back to `"See posting"` for Cloudflare-protected or bot-detection-heavy career pages that block plain httpx requests
+7. Watchlist scraper description is minimal (`"Job title at Company. Visit the posting..."`) — full descriptions will come when Claude AI goes live and descriptions are pulled from individual job pages
+8. Prisma has no connection pooling configured — will hit PostgreSQL connection limits around 50–100 concurrent users. Fix: add Prisma Accelerate or PgBouncer before scaling
+
+---
+
+## Changelog
+
+### 2026-04-09
+- **Fixed:** `apply_url` in mock scraper (`backend/scraper.py`) and seed data (`backend/seed_demo.py`) was generating fake URL slugs (e.g. `https://careers.google.com/data-analyst-demo`) that 404'd and redirected to the general careers page. Fixed to use the company's real careers page root URL for seed/mock data.
+- **Live:** Replaced mock `backend/scraper.py` with a real Playwright implementation. Scrapes career pages, extracts per-job URLs and titles, and enriches location via JSON-LD parsing, DOM heuristics, and concurrent async httpx fetches of individual job pages.
+- **Live:** Replaced mock `backend/ats_clients.py` with real API calls to Greenhouse (REST), Lever (REST), and Ashby (GraphQL) public job board APIs. All return real per-job `apply_url` values.
+- **Config:** Updated `backend/railway.toml` to install Playwright's Chromium browser binary during Railway build (`playwright install chromium --with-deps`).
 
 ---
 
