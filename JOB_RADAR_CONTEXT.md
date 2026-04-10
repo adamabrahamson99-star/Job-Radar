@@ -94,7 +94,7 @@ Some services are now live. The table below reflects the current state.
 | **Greenhouse API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `boards-api.greenhouse.io` |
 | **Lever API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `api.lever.co` |
 | **Ashby API** | ✅ Live | `backend/ats_clients.py` | Real GraphQL calls to `jobs.ashbyhq.com/api/non-user-graphql` |
-| **Resend email** | ❌ Mock | `backend/email_client.py` | Logs to console, no emails sent |
+| **Resend email** | ✅ Live | `backend/email_client.py` | Real Resend REST API calls; mock fallback when `RESEND_API_KEY` absent |
 | **APScheduler** | ❌ Mock | `backend/scheduler.py` | Stub only, no cron jobs run |
 | **Stripe** | ❌ Mock | `src/app/api/billing/*.ts` | Checkout redirects to `?upgraded=true`, webhook is a no-op |
 
@@ -142,8 +142,8 @@ The `apply_url` field stored in `job_postings` is always a direct link to the sp
 | Step | Service | Action |
 |---|---|---|
 | ~~1~~ | ~~Claude AI~~ | ✅ Done — `ANTHROPIC_API_KEY` triggers live mode automatically. Single combined call handles parse + score + summary. |
+| ~~3~~ | ~~Resend~~ | ✅ Done — `RESEND_API_KEY` triggers live mode automatically. Real Resend REST API calls via `httpx`. HTML templates ported from `src/lib/email.ts`. |
 | 2 | Stripe | Set all `STRIPE_*` env vars, replace mock billing route files in `src/app/api/billing/` |
-| 3 | Resend | Set `RESEND_API_KEY`, replace `_send()` mock in `backend/email_client.py` |
 | 4 | Scheduler | Replace `backend/scheduler.py` stub with full APScheduler bootstrap (Mon+Thu for Starter, daily for Pro, every 6h for Unlimited). Stagger checks across a 2h window to avoid simultaneous Playwright load. |
 
 ---
@@ -290,7 +290,7 @@ backend/
 ├── pipeline.py                # LIVE: single Claude call per job (parse + score + summary); auto-mocks if key absent
 ├── scraper.py                 # LIVE: Playwright career page scraper with JSON-LD + httpx location enrichment
 ├── ats_clients.py             # LIVE: Real Greenhouse / Lever / Ashby public API calls
-├── email_client.py            # MOCK: console.log instead of Resend
+├── email_client.py            # LIVE: Resend REST API; mock fallback when RESEND_API_KEY absent
 ├── scheduler.py               # MOCK: stub scheduler, no cron jobs
 ├── jobs_runner.py             # check_user_jobs() — master orchestrator
 ├── seed_demo.py               # Demo data seeder (user, companies, 20 postings)
@@ -384,6 +384,7 @@ Seed includes:
 ## Changelog
 
 ### 2026-04-10
+- **Live:** Replaced mock email client in `backend/email_client.py` with a real Resend REST API implementation using `httpx`. The `_send()` function now posts to `https://api.resend.com/emails` with `Authorization: Bearer {RESEND_API_KEY}`. HTML email templates ported from `src/lib/email.ts` preserving the Radar dark-theme design system (navy background, electric blue CTA, grade-based score badges). Auto-falls back to console logging when `RESEND_API_KEY` is not set. Both `send_instant_alert()` and `send_digest()` signatures are unchanged.
 - **Live:** Replaced mock AI pipeline in `backend/pipeline.py` with a real Claude API implementation. A single combined `analyze_job_posting()` call now handles job description parsing, candidate match scoring, and summary generation together (vs three separate mock functions before). Auto-falls back to mock behaviour when `ANTHROPIC_API_KEY` is not set, so local dev without a key continues to work. The three legacy function signatures (`parse_job_description`, `score_match`, `generate_summary`) are preserved as thin wrappers for backwards compatibility but are no longer called by `ingest_posting` directly.
 
 ### 2026-04-09
