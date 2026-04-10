@@ -89,7 +89,7 @@ Some services are now live. The table below reflects the current state.
 
 | Service | Status | File | Notes |
 |---|---|---|---|
-| **Claude AI** | ❌ Mock | `backend/pipeline.py` | Hardcoded profile parse, random match score (55–97), fixed summary/explanation, cycling role categories |
+| **Claude AI** | ✅ Live | `backend/pipeline.py` | Single combined API call per job: parse + score + summary. Auto-falls back to mock if `ANTHROPIC_API_KEY` is unset |
 | **Playwright scraper** | ✅ Live | `backend/scraper.py` | Real Playwright implementation — see scraper details below |
 | **Greenhouse API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `boards-api.greenhouse.io` |
 | **Lever API** | ✅ Live | `backend/ats_clients.py` | Real HTTP calls to `api.lever.co` |
@@ -141,7 +141,7 @@ The `apply_url` field stored in `job_postings` is always a direct link to the sp
 
 | Step | Service | Action |
 |---|---|---|
-| 1 | Claude AI | Set `ANTHROPIC_API_KEY`, replace `parse_job_description`, `score_match`, and `generate_summary` in `backend/pipeline.py` with real Claude API calls. Consider combining all three into one call for efficiency. |
+| ~~1~~ | ~~Claude AI~~ | ✅ Done — `ANTHROPIC_API_KEY` triggers live mode automatically. Single combined call handles parse + score + summary. |
 | 2 | Stripe | Set all `STRIPE_*` env vars, replace mock billing route files in `src/app/api/billing/` |
 | 3 | Resend | Set `RESEND_API_KEY`, replace `_send()` mock in `backend/email_client.py` |
 | 4 | Scheduler | Replace `backend/scheduler.py` stub with full APScheduler bootstrap (Mon+Thu for Starter, daily for Pro, every 6h for Unlimited). Stagger checks across a 2h window to avoid simultaneous Playwright load. |
@@ -287,7 +287,7 @@ backend/
 ├── main.py                    # FastAPI app, CORS, lifespan (auto-seed + scheduler)
 ├── database.py                # SQLAlchemy engine (lazy init from DATABASE_URL)
 ├── auth_utils.py              # Request auth: internal secret headers OR NextAuth JWT
-├── pipeline.py                # MOCK: fingerprinting, dedup, AI scoring, summary
+├── pipeline.py                # LIVE: single Claude call per job (parse + score + summary); auto-mocks if key absent
 ├── scraper.py                 # LIVE: Playwright career page scraper with JSON-LD + httpx location enrichment
 ├── ats_clients.py             # LIVE: Real Greenhouse / Lever / Ashby public API calls
 ├── email_client.py            # MOCK: console.log instead of Resend
@@ -382,6 +382,9 @@ Seed includes:
 ---
 
 ## Changelog
+
+### 2026-04-10
+- **Live:** Replaced mock AI pipeline in `backend/pipeline.py` with a real Claude API implementation. A single combined `analyze_job_posting()` call now handles job description parsing, candidate match scoring, and summary generation together (vs three separate mock functions before). Auto-falls back to mock behaviour when `ANTHROPIC_API_KEY` is not set, so local dev without a key continues to work. The three legacy function signatures (`parse_job_description`, `score_match`, `generate_summary`) are preserved as thin wrappers for backwards compatibility but are no longer called by `ingest_posting` directly.
 
 ### 2026-04-09
 - **Fixed:** `apply_url` in mock scraper (`backend/scraper.py`) and seed data (`backend/seed_demo.py`) was generating fake URL slugs (e.g. `https://careers.google.com/data-analyst-demo`) that 404'd and redirected to the general careers page. Fixed to use the company's real careers page root URL for seed/mock data.
