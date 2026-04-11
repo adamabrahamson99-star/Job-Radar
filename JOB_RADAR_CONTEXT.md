@@ -96,7 +96,7 @@ Some services are now live. The table below reflects the current state.
 | **Ashby API** | ✅ Live | `backend/ats_clients.py` | Real GraphQL calls to `jobs.ashbyhq.com/api/non-user-graphql` |
 | **Resend email** | ✅ Live | `backend/email_client.py` | Real Resend REST API calls; mock fallback when `RESEND_API_KEY` absent |
 | **APScheduler** | ❌ Mock | `backend/scheduler.py` | Stub only, no cron jobs run |
-| **Stripe** | ❌ Mock | `src/app/api/billing/*.ts` | Checkout redirects to `?upgraded=true`, webhook is a no-op |
+| **Stripe** | ✅ Live | `src/app/api/billing/*.ts` | Real Checkout sessions, Customer Portal, and webhook with signature verification |
 
 ### Playwright Scraper — How It Works
 
@@ -143,7 +143,7 @@ The `apply_url` field stored in `job_postings` is always a direct link to the sp
 |---|---|---|
 | ~~1~~ | ~~Claude AI~~ | ✅ Done — `ANTHROPIC_API_KEY` triggers live mode automatically. Single combined call handles parse + score + summary. |
 | ~~3~~ | ~~Resend~~ | ✅ Done — `RESEND_API_KEY` triggers live mode automatically. Real Resend REST API calls via `httpx`. HTML templates ported from `src/lib/email.ts`. |
-| 2 | Stripe | Set all `STRIPE_*` env vars, replace mock billing route files in `src/app/api/billing/` |
+| ~~2~~ | ~~Stripe~~ | ✅ Done — real Checkout sessions, Customer Portal, and webhook handler. Webhook verifies Stripe signature and updates `subscription_tier` + `subscription_status` in the DB on `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, and `invoice.payment_failed`. |
 | 4 | Scheduler | Replace `backend/scheduler.py` stub with full APScheduler bootstrap (Mon+Thu for Starter, daily for Pro, every 6h for Unlimited). Stagger checks across a 2h window to avoid simultaneous Playwright load. |
 
 ---
@@ -384,6 +384,7 @@ Seed includes:
 ## Changelog
 
 ### 2026-04-10
+- **Live:** Replaced mock Stripe billing routes in `src/app/api/billing/`. `create-checkout-session` creates a real Stripe Checkout session (looks up or creates a Stripe Customer, stores `stripe_customer_id` on the user). `portal-session` opens the Stripe Customer Portal for plan changes and cancellations. `webhook` verifies the Stripe signature and updates `subscription_tier` + `subscription_status` in the DB on `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, and `invoice.payment_failed`. Falls back to `FREE` / `CANCELED` on subscription deletion.
 - **Live:** Replaced mock email client in `backend/email_client.py` with a real Resend REST API implementation using `httpx`. The `_send()` function now posts to `https://api.resend.com/emails` with `Authorization: Bearer {RESEND_API_KEY}`. HTML email templates ported from `src/lib/email.ts` preserving the Radar dark-theme design system (navy background, electric blue CTA, grade-based score badges). Auto-falls back to console logging when `RESEND_API_KEY` is not set. Both `send_instant_alert()` and `send_digest()` signatures are unchanged.
 - **Live:** Replaced mock AI pipeline in `backend/pipeline.py` with a real Claude API implementation. A single combined `analyze_job_posting()` call now handles job description parsing, candidate match scoring, and summary generation together (vs three separate mock functions before). Auto-falls back to mock behaviour when `ANTHROPIC_API_KEY` is not set, so local dev without a key continues to work. The three legacy function signatures (`parse_job_description`, `score_match`, `generate_summary`) are preserved as thin wrappers for backwards compatibility but are no longer called by `ingest_posting` directly.
 
