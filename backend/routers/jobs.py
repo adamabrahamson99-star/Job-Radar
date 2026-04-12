@@ -16,6 +16,27 @@ router = APIRouter()
 MONTHLY_LIMIT = 3
 
 
+@router.post("/validate-url")
+async def validate_career_url(request: Request):
+    """
+    Lightweight pre-check called when a user adds a company.
+    Runs a page-1-only scrape and returns job count + sample titles
+    so the UI can confirm the URL is a real career page before saving.
+
+    Non-blocking from the UI's perspective — the company is saved regardless;
+    this endpoint just provides early feedback.
+    """
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    from scraper import preview_career_page
+    result = await preview_career_page(url)
+    return JSONResponse(content=result)
+
+
 @router.post("/run-check")
 async def run_check(
     request: Request,

@@ -100,19 +100,34 @@ Some services are now live. The table below reflects the current state.
 
 ### Playwright Scraper — How It Works
 
-`backend/scraper.py` is a real Playwright implementation. It uses the following location extraction strategy (in priority order):
+`backend/scraper.py` is a full multi-layer Playwright implementation. **No fixed collection cap** — all discovered jobs are returned and filtered downstream.
 
-1. **JSON-LD on the listing page** — Parses all `<script type="application/ld+json">` blocks on the career page for `JobPosting` schema entries. Free — no extra requests.
-2. **DOM parent heuristic** — Inspects the HTML parent container of each job link for city/state patterns or remote keywords.
-3. **Async concurrent httpx fetches** — For any jobs still missing location, fires up to 5 concurrent HTTP requests to individual job pages. Each page is parsed for JSON-LD, `<title>` tag patterns, and common location CSS classes.
-4. **Fallback** — Returns `"See posting"` if nothing is found.
+#### Job Detection — 5-layer approach
 
-Additional features:
-- Dismisses cookie banners / consent overlays automatically
-- Scrolls incrementally to trigger lazy-loaded job listings
+1. **JSON-LD (Layer 1)** — Parses `<script type="application/ld+json">` on the listing page for `JobPosting` schema. Fastest and most accurate when available; immediately returns if 2+ jobs found.
+2. **URL Clustering (Layer 2)** — Groups all candidate links by URL shape (`_url_template()` normalises numeric IDs → `{id}`, UUID → `{id}`, hyphenated slugs with `len > 8` → `{slug}`). Clusters of 3+ identical templates are accepted as job listing links. Falls back to threshold of 2 if no 3-cluster forms.
+3. **DOM Parent Grouping (Layer 3)** — Uses Playwright `evaluate` to get each link's parent container class; groups of 2+ sharing the same container class are accepted.
+4. **Base-path child check (Layer 4)** — Links that are sub-paths of the career page base URL are accepted as supplementary signals.
+5. **Content sampling validation (Layer 5)** — Fetches one candidate URL and checks for 8 job-page signals (Apply button, job description section, etc.) to confirm the cluster is genuinely a job listing.
+
+#### Pagination — unlimited jobs
+
+After Playwright loads the first page (with dynamic scroll + load-more clicking), the scraper detects URL-pattern pagination (`?page=N`, `?start=N`, `/jobs/page/N`, etc.) and fires parallel `httpx` fetches for all remaining pages. Each batch filters links against the known URL templates found on page 1, with early termination when a batch returns no new links.
+
+- **`_scroll_to_load_dynamic()`** — Scrolls until link count stabilises between rounds (replaces fixed-step scroll)
+- **`_click_load_more()`** — Click loop on 12 known load-more button selectors, stops when no new content appears
+- **`_fetch_paginated_links()`** — Parallel httpx batches; stops at first empty batch
+
+#### Additional scraper features
+- Dismisses cookie banners / consent overlays automatically (17 known selectors)
 - Detects iframe-based career pages (Workday, iCIMS, Taleo, SuccessFactors)
-- Caps results at 50 postings per company
-- Uses a realistic Chrome user-agent to avoid bot detection
+- `preview_career_page(url)` — lightweight page-1-only scrape used at company-add time; returns `{status, job_count, samples, message}` for UI feedback
+- Uses a realistic Chrome user-agent string to reduce bot detection
+- Location enrichment: JSON-LD on listing page → DOM heuristics → async concurrent httpx fetches of individual job pages → `"See posting"` fallback
+
+#### Title pre-filter (cost gate replacing collection cap)
+
+`backend/pipeline.py` runs `_title_matches_profile(title, profile)` before the Claude API call. If the job title shares zero keywords with the candidate's `target_roles` + `high_value_titles`, the posting is still inserted but assigned a default score of 5 without spending an API call. This replaces the old 50-job cap as the cost control mechanism for large company watchlists.
 
 **Railway build requirement:** `backend/railway.toml` includes `buildCommand = "pip install -r requirements.txt && playwright install chromium --with-deps"` to install the Chromium browser binary during deployment.
 
@@ -237,9 +252,9 @@ src/
 │       ├── jobs/filter-options/route.ts  # Distinct role categories + locations
 │       ├── jobs/manual-check/route.ts    # FREE tier manual check trigger
 │       ├── jobs/mark-visited/route.ts    # Clear "new since last visit" flags
-│       ├── billing/create-checkout-session/route.ts  # Mock Stripe checkout
-│       ├── billing/portal-session/route.ts           # Mock Stripe portal
-│       ├── billing/webhook/route.ts                  # Mock Stripe webhook
+│       ├── billing/create-checkout-session/route.ts  # LIVE Stripe checkout
+│       ├── billing/portal-session/route.ts           # LIVE Stripe portal
+│       ├── billing/webhook/route.ts                  # LIVE Stripe webhook (signature verified)
 │       ├── notifications/preferences/route.ts        # Notification pref CRUD
 │       └── onboarding/complete/route.ts              # Mark onboarding done
 │
@@ -371,17 +386,26 @@ Seed includes:
 ## Known Issues / TODO
 
 1. `backend/auth_utils.py` needs the updated version with `X-Internal-User-ID` / `X-Internal-Secret` support (fix pending deploy)
-2. Claude AI, Resend, APScheduler, and Stripe are still mocked — see "Switching Remaining Services to Live Mode" above
+2. APScheduler (`backend/scheduler.py`) is still a stub — no cron jobs run. See "Switching Remaining Services to Live Mode" above.
 3. The FastAPI backend's `seed_demo.py` auto-seed may fail if the DB schema hasn't been pushed yet (Prisma migration runs on Next.js service, not FastAPI)
 4. Mobile responsive layout is basic — tablet (768px+) is functional, phone is stretch goal
 5. No error boundary component yet (planned)
 6. Playwright scraper location extraction falls back to `"See posting"` for Cloudflare-protected or bot-detection-heavy career pages that block plain httpx requests
-7. Watchlist scraper description is minimal (`"Job title at Company. Visit the posting..."`) — full descriptions will come when Claude AI goes live and descriptions are pulled from individual job pages
-8. Prisma has no connection pooling configured — will hit PostgreSQL connection limits around 50–100 concurrent users. Fix: add Prisma Accelerate or PgBouncer before scaling
+7. Companies with only 1–2 job openings may return zero results — the clustering threshold requires 2+ identical URL shapes. JSON-LD (Layer 1) helps if the site implements schema.
+8. No hard limit on DB rows per user — for very large watchlists tracking companies with thousands of jobs (e.g. HPE), the `job_postings` table will grow quickly. Monitor row counts and consider adding a per-user retention policy before production scale.
+9. Prisma has no connection pooling configured — will hit PostgreSQL connection limits around 50–100 concurrent users. Fix: add Prisma Accelerate or PgBouncer before scaling.
 
 ---
 
 ## Changelog
+
+### 2026-04-12
+- **Scraper rewrite:** Completely rewrote `backend/scraper.py` with a 5-layer job detection approach (JSON-LD → URL clustering → DOM parent grouping → base-path child check → content sampling). Replaced keyword-based `_is_job_link()` — which had false positives (customer centres, recycling pages) — with a cluster-based approach that works across any career page structure.
+- **Pagination support:** Added URL-pattern pagination detection (`?page=N`, `?start=N`, path-segment pagination) with parallel `httpx` fetches. Dynamic scroll and load-more clicking replace fixed-step scroll. No fixed job collection cap.
+- **Title pre-filter:** Added `_title_matches_profile(title, profile)` to `backend/pipeline.py`. Called before the Claude API call in `ingest_posting()`. If the job title shares no keywords with the candidate's `target_roles` + `high_value_titles`, the posting is stored with a default score of 5 without an API call. This is the cost gate that replaces the removed 50-job collection cap.
+- **Location pre-filter:** Added `_location_passes_filter(job_location, preferred_locations)` to `backend/pipeline.py`. Rejects postings with a clear non-US country in the last comma-segment (e.g. "Tokyo, Japan") when all candidate preferences are US-oriented. Strengthened the Claude prompt with a hard 35-score cap for confirmed location mismatches.
+- **Company URL validation:** Added `POST /api/jobs/validate-url` endpoint to `backend/routers/jobs.py` (calls `preview_career_page()`). The Next.js `POST /api/companies` route now fires a non-blocking preview call after saving the company and returns `{ company, preview }` — gives the UI early feedback on job count without blocking the save.
+- **`preview_career_page()`:** New lightweight function in `scraper.py` that runs a page-1-only scrape and returns `{ status, job_count, samples, message }` for company-add-time validation.
 
 ### 2026-04-10
 - **Live:** Replaced mock Stripe billing routes in `src/app/api/billing/`. `create-checkout-session` creates a real Stripe Checkout session (looks up or creates a Stripe Customer, stores `stripe_customer_id` on the user). `portal-session` opens the Stripe Customer Portal for plan changes and cancellations. `webhook` verifies the Stripe signature and updates `subscription_tier` + `subscription_status` in the DB on `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, and `invoice.payment_failed`. Falls back to `FREE` / `CANCELED` on subscription deletion.

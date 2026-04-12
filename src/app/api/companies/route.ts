@@ -64,5 +64,28 @@ export async function POST(req: NextRequest) {
     data: { user_id: userId, company_name: company_name.trim(), career_page_url: career_page_url.trim() },
   });
 
-  return NextResponse.json({ company }, { status: 201 });
+  // Fire-and-forget URL preview — provides early feedback without blocking the save.
+  // Non-blocking: company is already created above regardless of outcome.
+  let preview: Record<string, unknown> | null = null;
+  try {
+    const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
+    const secret = process.env.INTERNAL_API_SECRET ?? "";
+    const previewRes = await fetch(`${backendUrl}/api/jobs/validate-url`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": secret,
+        "X-Internal-User-ID": userId,
+      },
+      body: JSON.stringify({ url: career_page_url.trim() }),
+      signal: AbortSignal.timeout(20_000), // 20 s cap so UI isn't blocked long
+    });
+    if (previewRes.ok) {
+      preview = await previewRes.json();
+    }
+  } catch {
+    // Preview failure is non-fatal — company is saved, just no early feedback
+  }
+
+  return NextResponse.json({ company, preview }, { status: 201 });
 }

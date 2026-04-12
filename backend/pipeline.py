@@ -20,6 +20,132 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
+# ─── Location pre-filter ─────────────────────────────────────────────────────
+
+# All known US state names and abbreviations, upper-cased for fast lookup
+_US_LOCATION_TERMS = frozenset({
+    # Two-letter abbreviations
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN",
+    "IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV",
+    "NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN",
+    "TX","UT","VT","VA","WA","WV","WI","WY","DC",
+    # Full state names
+    "ALABAMA","ALASKA","ARIZONA","ARKANSAS","CALIFORNIA","COLORADO","CONNECTICUT",
+    "DELAWARE","FLORIDA","GEORGIA","HAWAII","IDAHO","ILLINOIS","INDIANA","IOWA",
+    "KANSAS","KENTUCKY","LOUISIANA","MAINE","MARYLAND","MASSACHUSETTS","MICHIGAN",
+    "MINNESOTA","MISSISSIPPI","MISSOURI","MONTANA","NEBRASKA","NEVADA",
+    "NEW HAMPSHIRE","NEW JERSEY","NEW MEXICO","NEW YORK","NORTH CAROLINA",
+    "NORTH DAKOTA","OHIO","OKLAHOMA","OREGON","PENNSYLVANIA","RHODE ISLAND",
+    "SOUTH CAROLINA","SOUTH DAKOTA","TENNESSEE","TEXAS","UTAH","VERMONT",
+    "VIRGINIA","WASHINGTON","WEST VIRGINIA","WISCONSIN","WYOMING",
+    "DISTRICT OF COLUMBIA",
+    # Country-level US identifiers
+    "UNITED STATES","UNITED STATES OF AMERICA","USA","US","U.S.","U.S.A.",
+})
+
+# Preference terms that signal a US-only requirement
+_US_PREF_TERMS = frozenset({
+    "united states", "united states of america", "us", "usa",
+    "u.s.", "u.s.a.",
+})
+
+
+def _location_passes_filter(job_location: str, preferred_locations: list) -> bool:
+    """
+    Returns True if the job location is compatible with the candidate's preferred
+    locations. Errs heavily on the side of inclusion — only rejects when a clear
+    country mismatch can be detected.
+
+    Rules:
+    - No preferred locations set → always pass.
+    - Location is empty / "See posting" / "Not specified" → always pass (can't tell).
+    - Location contains "Remote" → always pass.
+    - Any preferred term appears as a substring of the location → pass.
+    - If ALL preferred locations are US-oriented terms:
+        • "City, ST" where ST is a US state abbreviation → pass.
+        • Location contains "United States" / "USA" → pass.
+        • Last comma-segment is a non-US state/country name → REJECT.
+    - All other cases → pass (too ambiguous to reject).
+    """
+    if not preferred_locations:
+        return True
+
+    loc = job_location.strip()
+    loc_lower = loc.lower()
+
+    # Unclear or remote locations always pass
+    if not loc or loc_lower in ("see posting", "not specified", ""):
+        return True
+    if "remote" in loc_lower:
+        return True
+
+    pref_lower = {p.lower().strip() for p in preferred_locations if p}
+    if not pref_lower:
+        return True
+
+    # Direct substring match: if any preferred term appears in the location → pass
+    if any(pref in loc_lower for pref in pref_lower):
+        return True
+
+    # US-only preference path
+    if pref_lower.issubset(_US_PREF_TERMS | {"remote", "anywhere", "worldwide"}):
+        parts = [p.strip() for p in loc.split(",")]
+        if len(parts) >= 2:
+            last = parts[-1].strip().upper()
+            # Recognised US location term → pass
+            if last in _US_LOCATION_TERMS:
+                return True
+            # Non-US trailing segment detected → reject
+            # (catches "Tokyo, Japan", "London, UK", "Berlin, Germany", etc.)
+            return False
+        # Single-segment location without a comma (e.g. just "Austin" or "London")
+        # Too ambiguous to reject — pass through
+        return True
+
+    # Non-US or mixed preferences — accept if uncertain
+    return True
+
+
+# ─── Title pre-filter ────────────────────────────────────────────────────────
+
+def _title_matches_profile(title: str, profile: dict) -> bool:
+    """
+    Cheap keyword-overlap check between a job title and the candidate's
+    target roles / high-value titles.  Called before the Claude API call so
+    we don't spend tokens on obviously-irrelevant postings.
+
+    Returns True (pass through) in the following cases:
+    - Profile has no target role / title preferences (nothing to filter against).
+    - At least one word from any target role or high-value title appears in the
+      job title (case-insensitive, whole-word match via simple split).
+
+    Returns False (skip Claude call) only when:
+    - The candidate has explicit role preferences AND the title shares zero
+      keywords with all of them.
+
+    We err heavily on the side of inclusion — the goal is to catch clear
+    mismatches (e.g. "Facilities Manager" for a Software Engineer candidate),
+    not to be a strict filter.
+    """
+    target_roles: list = profile.get("target_roles") or []
+    high_value_titles: list = profile.get("high_value_titles") or []
+
+    all_prefs = [str(r) for r in target_roles + high_value_titles if r]
+    if not all_prefs:
+        return True  # No preferences set — always pass
+
+    title_words = {w.lower() for w in title.split() if len(w) > 2}
+    if not title_words:
+        return True  # Unparseable title — pass through
+
+    for pref in all_prefs:
+        pref_words = {w.lower() for w in pref.split() if len(w) > 2}
+        if pref_words & title_words:  # non-empty intersection
+            return True
+
+    return False
+
+
 # ─── Fingerprinting ───────────────────────────────────────────────────────────
 
 def make_fingerprint(company_name: str, title: str, apply_url: str) -> str:
@@ -72,6 +198,11 @@ Scoring guide:
 - 60–79: Good match — most requirements met, minor gaps
 - 40–59: Partial match — relevant background but notable gaps
 - 0–39: Poor match — different domain, level, or skill set
+
+Location rule: if the candidate has preferred locations and the job location does
+not fall within them (and is not Remote), treat this as a hard mismatch and cap
+the score at 35 regardless of skill alignment. Always call out the location
+mismatch in match_explanation.
 
 Salary: extract from the description if present, otherwise leave as null.
 Return ONLY the JSON object."""
@@ -263,6 +394,15 @@ def ingest_posting(
     if not title or not apply_url:
         return False
 
+    # ── Location pre-filter ───────────────────────────────────────────────────
+    preferred_locations = profile.get("preferred_locations", [])
+    if not _location_passes_filter(location, preferred_locations):
+        print(
+            f"[PIPELINE] Skipping '{title}' at {company_name} "
+            f"— location '{location}' outside preferred {preferred_locations}"
+        )
+        return False
+
     fingerprint = make_fingerprint(company_name, title, apply_url)
 
     # ── Dedup check ───────────────────────────────────────────────────────────
@@ -284,14 +424,34 @@ def ingest_posting(
 
     raw_description = raw.get("description", "") or f"{title} at {company_name} in {location}"
 
-    # ── Single Claude call (or mock fallback) ─────────────────────────────────
-    analysis = analyze_job_posting(
-        raw_description=raw_description,
-        profile=profile,
-        title=title,
-        company=company_name,
-        location=location,
-    )
+    # ── Title pre-filter — skip Claude call for obvious role mismatches ────────
+    if not _title_matches_profile(title, profile):
+        print(
+            f"[PIPELINE] Skipping Claude for '{title}' at {company_name} "
+            f"— title has no keyword overlap with target roles"
+        )
+        # Still insert the posting (it's new and real), just with a low default score
+        analysis = {
+            "experience_level": None,
+            "role_category": None,
+            "required_skills": [],
+            "salary_min": None,
+            "salary_max": None,
+            "salary_currency": None,
+            "salary_raw": None,
+            "match_score": 5,
+            "match_explanation": "Role title does not match your target roles or preferred titles.",
+            "description_summary": "",
+        }
+    else:
+        # ── Single Claude call (or mock fallback) ─────────────────────────────
+        analysis = analyze_job_posting(
+            raw_description=raw_description,
+            profile=profile,
+            title=title,
+            company=company_name,
+            location=location,
+        )
 
     # Salary: prefer values from the raw posting (ATS APIs often provide them);
     # use Claude's extracted values as fallback
