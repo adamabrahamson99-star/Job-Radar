@@ -74,7 +74,7 @@ try {
       "X-Internal-Secret": internalSecret,
     },
     body: JSON.stringify({ user_id: userId }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(180000),
   });
   if (resp.ok) checkResult = await resp.json();
 } catch {
