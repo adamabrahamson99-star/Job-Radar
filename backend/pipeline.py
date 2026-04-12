@@ -43,29 +43,62 @@ _US_LOCATION_TERMS = frozenset({
     "UNITED STATES","UNITED STATES OF AMERICA","USA","US","U.S.","U.S.A.",
 })
 
-# Preference terms that signal a US-only requirement
+# Preference terms that signal a US-only requirement (lower-cased for comparison)
 _US_PREF_TERMS = frozenset({
     "united states", "united states of america", "us", "usa",
     "u.s.", "u.s.a.",
+})
+
+# Recognised non-US country names and common abbreviations (lower-cased).
+# Used to identify "City, Country" patterns so we can make confident rejections.
+# Not exhaustive — only needed for countries that appear as the trailing segment
+# of a job location string.
+_KNOWN_COUNTRIES = frozenset({
+    "afghanistan","albania","algeria","andorra","angola","argentina","armenia",
+    "australia","austria","azerbaijan","bahrain","bangladesh","belarus","belgium",
+    "bolivia","bosnia","botswana","brazil","bulgaria","cambodia","cameroon",
+    "canada","chile","china","colombia","croatia","cuba","cyprus","czechia",
+    "czech republic","denmark","ecuador","egypt","estonia","ethiopia","finland",
+    "france","georgia","germany","ghana","greece","guatemala","honduras",
+    "hungary","india","indonesia","iran","iraq","ireland","israel","italy",
+    "japan","jordan","kazakhstan","kenya","kosovo","kuwait","latvia","lebanon",
+    "libya","lithuania","luxembourg","malaysia","malta","mexico","moldova",
+    "mongolia","morocco","mozambique","myanmar","nepal","netherlands",
+    "new zealand","nigeria","north korea","norway","oman","pakistan","panama",
+    "paraguay","peru","philippines","poland","portugal","qatar","romania",
+    "russia","saudi arabia","senegal","serbia","singapore","slovakia","slovenia",
+    "south africa","south korea","spain","sri lanka","sudan","sweden",
+    "switzerland","syria","taiwan","tanzania","thailand","tunisia","turkey",
+    "ukraine","united arab emirates","uae","united kingdom","uk","uruguay",
+    "uzbekistan","venezuela","vietnam","yemen","zimbabwe",
+    # Common regional / alternate names
+    "england","scotland","wales","northern ireland","great britain",
+    "hong kong","macau","puerto rico",
 })
 
 
 def _location_passes_filter(job_location: str, preferred_locations: list) -> bool:
     """
     Returns True if the job location is compatible with the candidate's preferred
-    locations. Errs heavily on the side of inclusion — only rejects when a clear
-    country mismatch can be detected.
+    locations. Works for any country preference, not just the US.
 
-    Rules:
-    - No preferred locations set → always pass.
-    - Location is empty / "See posting" / "Not specified" → always pass (can't tell).
-    - Location contains "Remote" → always pass.
-    - Any preferred term appears as a substring of the location → pass.
-    - If ALL preferred locations are US-oriented terms:
-        • "City, ST" where ST is a US state abbreviation → pass.
-        • Location contains "United States" / "USA" → pass.
-        • Last comma-segment is a non-US state/country name → REJECT.
-    - All other cases → pass (too ambiguous to reject).
+    Errs heavily on the side of inclusion — only rejects when a confident
+    country/region mismatch can be identified from a "City, Country" pattern.
+
+    Rules (evaluated in order):
+    1. No preferred locations set → always pass.
+    2. Location is empty / "See posting" / "Not specified" → always pass.
+    3. Location contains "Remote" → always pass.
+    4. Any preferred term appears as a substring of the location → pass.
+    5. Location has no comma (single segment, e.g. "Austin" or "London") →
+       too ambiguous to reject → pass.
+    6. Last comma-segment is a recognised US state/identifier:
+       • Candidate has a US preference → pass.
+       • No US preference → reject.
+    7. Last comma-segment is a recognised non-US country name:
+       • That country substring-matches any preferred term (or vice-versa) → pass.
+       • No match → reject.
+    8. Last comma-segment is unrecognised → too ambiguous → pass.
     """
     if not preferred_locations:
         return True
@@ -83,26 +116,33 @@ def _location_passes_filter(job_location: str, preferred_locations: list) -> boo
     if not pref_lower:
         return True
 
-    # Direct substring match: if any preferred term appears in the location → pass
+    # Rule 4: direct substring match — any preferred term appears in the location
     if any(pref in loc_lower for pref in pref_lower):
         return True
 
-    # US-only preference path
-    if pref_lower.issubset(_US_PREF_TERMS | {"remote", "anywhere", "worldwide"}):
-        parts = [p.strip() for p in loc.split(",")]
-        if len(parts) >= 2:
-            last = parts[-1].strip().upper()
-            # Recognised US location term → pass
-            if last in _US_LOCATION_TERMS:
-                return True
-            # Non-US trailing segment detected → reject
-            # (catches "Tokyo, Japan", "London, UK", "Berlin, Germany", etc.)
-            return False
-        # Single-segment location without a comma (e.g. just "Austin" or "London")
-        # Too ambiguous to reject — pass through
+    # Rules 5–8: inspect the last comma-segment to identify the job's country
+    parts = [p.strip() for p in loc.split(",")]
+    if len(parts) < 2:
+        # Single-segment location — too ambiguous to reject
         return True
 
-    # Non-US or mixed preferences — accept if uncertain
+    last_upper = parts[-1].strip().upper()
+    last_lower = parts[-1].strip().lower()
+
+    # Rule 6: last segment is a recognised US state or country identifier
+    if last_upper in _US_LOCATION_TERMS:
+        has_us_pref = bool(pref_lower & _US_PREF_TERMS)
+        return has_us_pref
+
+    # Rule 7: last segment is a recognised non-US country name
+    if last_lower in _KNOWN_COUNTRIES:
+        # Accept if any preferred term overlaps with the identified country
+        return any(
+            last_lower in pref or pref in last_lower
+            for pref in pref_lower
+        )
+
+    # Rule 8: unrecognised trailing segment — too ambiguous to reject
     return True
 
 
