@@ -90,6 +90,17 @@ export const authOptions: NextAuthOptions = {
         // Sync latest values from DB
         token.onboardingCompleted = dbUser.onboarding_completed;
         token.subscriptionTier = dbUser.subscription_tier;
+
+        // Dev account override — emails listed in DEV_ACCOUNT_EMAILS are always
+        // treated as PRO/ACTIVE regardless of what's in the DB. This lets dev
+        // accounts test all Pro features without being billed or auto-scheduled.
+        const devEmails = (process.env.DEV_ACCOUNT_EMAILS ?? "")
+          .split(",")
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean);
+        if (devEmails.includes((token.email as string ?? "").toLowerCase())) {
+          token.subscriptionTier = "PRO";
+        }
       }
 
       return token;

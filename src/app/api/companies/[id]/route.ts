@@ -41,6 +41,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const company = await getCompanyOrFail(params.id, userId);
   if (!company) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Delete all job postings associated with this company before removing it.
+  // The FK (company_id) is nullable with no cascade, so postings would otherwise
+  // remain orphaned in the feed with a null company_id but the original company_name.
+  await prisma.jobPosting.deleteMany({ where: { company_id: params.id } });
   await prisma.company.delete({ where: { id: params.id } });
   return NextResponse.json({ ok: true });
 }
