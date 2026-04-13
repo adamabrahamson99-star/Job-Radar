@@ -13,8 +13,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from pipeline import ingest_posting, run_takedown_detection
-from scraper import scrape_career_page
+from pipeline import ingest_posting, run_takedown_detection, _title_matches_profile
+from scraper import scrape_career_page, _enrich_locations
 from ats_clients import run_ats_discovery
 
 
@@ -77,10 +77,31 @@ async def _check_user_jobs_async(user_id: str) -> dict:
         for company in companies:
             try:
                 raw_jobs = await scrape_career_page(company.career_page_url, company.company_name)
+
+                # ── Title pre-filter before location enrichment ───────────────
+                # Only fire HTTP location requests for jobs that matched the
+                # candidate's target roles / high-value titles. Unmatched jobs
+                # (which will score 5 and appear at the bottom of the feed)
+                # keep "See posting" and skip enrichment entirely.
+                matched_jobs = [
+                    j for j in raw_jobs
+                    if _title_matches_profile(j.get("title", ""), profile)
+                ]
+                unmatched_jobs = [
+                    j for j in raw_jobs
+                    if not _title_matches_profile(j.get("title", ""), profile)
+                ]
+
+                # Enrich locations only for title-matched jobs
+                if matched_jobs:
+                    matched_jobs = await _enrich_locations(matched_jobs)
+
+                all_jobs = matched_jobs + unmatched_jobs
+
                 new_count = 0
                 live_ids: set[str] = set()
 
-                for raw in raw_jobs:
+                for raw in all_jobs:
                     from pipeline import make_fingerprint
                     fp = make_fingerprint(company.company_name, raw.get("title", ""), raw.get("apply_url", ""))
                     live_ids.add(fp)
@@ -104,7 +125,7 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                         "UPDATE companies SET last_checked_at = NOW(), posting_count = :cnt "
                         "WHERE id = :id"
                     ),
-                    {"cnt": len(raw_jobs), "id": company.id},
+                    {"cnt": len(all_jobs), "id": company.id},
                 )
                 db.commit()
                 total_new += new_count
@@ -134,7 +155,6 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                 errors.append(f"ATS discovery error: {e}")
 
         # ── 3. Notification trigger (PRO/UNLIMITED with high-scoring new posts) ──
-        # Read new postings with match_score >= 70
         user_row = db.execute(
             text("SELECT subscription_tier FROM users WHERE id = :uid"),
             {"uid": user_id},
@@ -142,7 +162,6 @@ async def _check_user_jobs_async(user_id: str) -> dict:
         tier = user_row.subscription_tier if user_row else "FREE"
 
         if tier in ("PRO", "UNLIMITED", "TRIALING") and total_new > 0:
-            # Get notification prefs
             pref_row = db.execute(
                 text("SELECT email_enabled, instant_alert_threshold FROM notification_preferences WHERE user_id = :uid"),
                 {"uid": user_id},
@@ -172,7 +191,6 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                 )
                 db.commit()
 
-                # Send instant email alerts
                 if email_enabled:
                     user_email_row = db.execute(
                         text("SELECT email FROM users WHERE id = :uid"),
@@ -213,5 +231,19 @@ def check_user_jobs(user_id: str) -> dict:
 
 
 async def check_user_jobs_async(user_id: str) -> dict:
-    """Async version — used by FastAPI endpoints."""
+    """Async version — used by FastAPI endpoints (legacy synchronous path)."""
     return await _check_user_jobs_async(user_id)
+
+
+async def run_check_background(job_id: str, user_id: str) -> None:
+    """
+    Background task wrapper used by the fire-and-forget /run-check endpoint.
+    Runs the full job check and writes the result to the in-memory job store
+    so the frontend can poll /check-status/{job_id} for completion.
+    """
+    from job_status import update_job
+    try:
+        result = await _check_user_jobs_async(user_id)
+        update_job(job_id, "complete", result=result)
+    except Exception as e:
+        update_job(job_id, "error", error=str(e))

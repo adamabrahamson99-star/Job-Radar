@@ -991,10 +991,10 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
             await context.close()
             await browser.close()
 
-    # ── 8. Enrich missing locations via async HTTP ────────────────────────────
-    results = await _enrich_locations(results)
-
-    # ── 9. Final location fallback + deduplication ────────────────────────────
+    # ── 8. Final location fallback + deduplication ───────────────────────────
+    # Note: HTTP-based location enrichment is intentionally not run here.
+    # jobs_runner.py calls _enrich_locations() *after* the title pre-filter so
+    # we only fire HTTP requests for jobs that matched the candidate's profile.
     seen: set[str] = set()
     deduped: list[dict] = []
     for job in results:

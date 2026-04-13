@@ -6,9 +6,9 @@ import { prisma } from "@/lib/prisma";
 const MONTHLY_LIMIT = 3;
 
 /**
- * MOCK MODE: All tiers can run manual checks (tier restriction removed for demo).
- * The FastAPI call is attempted but gracefully falls back if the backend isn't running.
- * Re-enable tier gating once real services are connected.
+ * Kicks off a background job check via FastAPI and returns a job_id immediately.
+ * The frontend polls GET /api/jobs/check-status/[jobId] for completion.
+ * FREE tier monthly limit is enforced before the check is started.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   const userId = (session.user as any).id;
   const tier = (session.user as any).subscriptionTier ?? "FREE";
 
-  // For FREE tier: enforce monthly limit. Other tiers: unlimited in mock mode.
+  // For FREE tier: enforce monthly limit
   if (tier === "FREE") {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -59,44 +59,59 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Try FastAPI backend — gracefully no-op if not running
-  let checkResult: any = { ok: true, new_postings: 0 };
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"; // set NEXT_PUBLIC_API_URL in Railway env vars
-
-  const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
-
-try {
-  const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-User-ID": userId,
-      "X-Internal-Secret": internalSecret,
-    },
-    body: JSON.stringify({ user_id: userId }),
-    signal: AbortSignal.timeout(180000),
-  });
-  if (resp.ok) checkResult = await resp.json();
-} catch {
-  // FastAPI not running — return mock success
-  checkResult = { ok: true, new_postings: 3 };
-}
-
-  // Fetch fresh remaining count for FREE tier
-  const updatedUser = tier === "FREE"
-    ? await prisma.user.findUnique({
-        where: { id: userId },
-        select: { manual_checks_this_month: true },
-      })
-    : null;
+  // Fetch remaining count for FREE tier (used in response)
+  const updatedUser =
+    tier === "FREE"
+      ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: { manual_checks_this_month: true },
+        })
+      : null;
 
   const checksRemaining = updatedUser
     ? Math.max(0, MONTHLY_LIMIT - updatedUser.manual_checks_this_month)
-    : 999; // non-FREE tiers: effectively unlimited in mock mode
+    : 999;
 
-  return NextResponse.json({
-    ok: true,
-    checks_remaining: checksRemaining,
-    ...checkResult,
-  });
+  // Fire the background check — FastAPI returns a job_id immediately
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
+
+  try {
+    const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-User-ID": userId,
+        "X-Internal-Secret": internalSecret,
+      },
+      body: JSON.stringify({ user_id: userId }),
+      signal: AbortSignal.timeout(10000), // 10s — just enough to register the background task
+    });
+
+    if (resp.ok) {
+      const { job_id } = await resp.json();
+      return NextResponse.json({
+        ok: true,
+        job_id,
+        status: "running",
+        checks_remaining: checksRemaining,
+      });
+    }
+
+    // FastAPI returned an error status
+    return NextResponse.json({
+      ok: false,
+      status: "error",
+      error: "Backend returned an error — check FastAPI logs.",
+      checks_remaining: checksRemaining,
+    });
+  } catch {
+    // FastAPI not running or timed out
+    return NextResponse.json({
+      ok: false,
+      status: "error",
+      error: "Could not reach backend — FastAPI may not be running.",
+      checks_remaining: checksRemaining,
+    });
+  }
 }

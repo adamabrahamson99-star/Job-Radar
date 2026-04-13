@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from database import get_db
 from auth_utils import get_user_id_from_request
-from jobs_runner import check_user_jobs_async
 
 router = APIRouter()
 
@@ -22,9 +21,6 @@ async def validate_career_url(request: Request):
     Lightweight pre-check called when a user adds a company.
     Runs a page-1-only scrape and returns job count + sample titles
     so the UI can confirm the URL is a real career page before saving.
-
-    Non-blocking from the UI's perspective — the company is saved regardless;
-    this endpoint just provides early feedback.
     """
     body = await request.json()
     url = (body.get("url") or "").strip()
@@ -40,12 +36,13 @@ async def validate_career_url(request: Request):
 @router.post("/run-check")
 async def run_check(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
-    Trigger a job check for a user.
-    Called internally by the Next.js manual-check API route.
-    Also used by the scheduler.
+    Kick off a background job check for a user.
+    Returns a job_id immediately — the check runs asynchronously.
+    Poll GET /api/jobs/check-status/{job_id} for completion.
     """
     body = await request.json()
     user_id = body.get("user_id")
@@ -55,8 +52,27 @@ async def run_check(
     if not user_id:
         user_id = get_user_id_from_request(request)
 
-    result = await check_user_jobs_async(user_id)
-    return JSONResponse(content=result)
+    from job_status import create_job
+    from jobs_runner import run_check_background
+
+    job_id = create_job()
+    background_tasks.add_task(run_check_background, job_id, user_id)
+
+    return JSONResponse(content={"job_id": job_id, "status": "running"})
+
+
+@router.get("/check-status/{job_id}")
+async def check_status(job_id: str):
+    """
+    Poll this endpoint after POST /run-check to get the result.
+    Returns { status: "running" | "complete" | "error", result?, error? }
+    Returns 404 if the job_id is unknown (e.g. after a service restart).
+    """
+    from job_status import get_job
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found — the service may have restarted")
+    return JSONResponse(content=job)
 
 
 @router.post("/trigger-schedule-update")

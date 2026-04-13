@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/utils";
@@ -178,6 +178,12 @@ export function WatchlistTab({ tier }: WatchlistTabProps) {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [manualCheckLoading, setManualCheckLoading] = useState(false);
   const [manualCheckResult, setManualCheckResult] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Clear polling on unmount
+  useEffect(() => () => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+  }, []);
 
   const limit = TIER_LIMITS[tier] ?? 3;
   const atLimit = limit !== Infinity && companies.length >= limit;
@@ -247,26 +253,80 @@ export function WatchlistTab({ tier }: WatchlistTabProps) {
   };
 
   const handleManualCheck = async () => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     setManualCheckLoading(true);
     setManualCheckResult(null);
+
     try {
       const res = await fetch("/api/jobs/manual-check", { method: "POST" });
       const data = await res.json();
+
       if (res.status === 429) {
         setManualCheckResult(`⚠ ${data.error}`);
-      } else if (res.ok) {
-        const remaining = data.checks_remaining;
-        const found = data.new_postings ?? 0;
-        setManualCheckResult(
-          `✓ Check complete — ${found} new posting${found !== 1 ? "s" : ""} found. ${remaining} check${remaining !== 1 ? "s" : ""} remaining this month.`
-        );
-        await fetchCompanies();
-      } else {
-        setManualCheckResult(`Error: ${data.error}`);
+        setManualCheckLoading(false);
+        return;
       }
+
+      if (!res.ok || !data.ok) {
+        setManualCheckResult(`Error: ${data.error ?? "Unknown error"}`);
+        setManualCheckLoading(false);
+        return;
+      }
+
+      const { job_id, checks_remaining } = data;
+
+      // No job_id means the backend isn't running
+      if (!job_id) {
+        setManualCheckResult("Check failed — FastAPI backend may not be running.");
+        setManualCheckLoading(false);
+        return;
+      }
+
+      setManualCheckResult("⏳ Scanning your watchlist…");
+
+      // Poll /api/jobs/check-status/{job_id} every 4 seconds
+      let polls = 0;
+      const MAX_POLLS = 150; // 10 minutes
+
+      pollIntervalRef.current = setInterval(async () => {
+        polls++;
+        if (polls > MAX_POLLS) {
+          clearInterval(pollIntervalRef.current!);
+          setManualCheckLoading(false);
+          setManualCheckResult("⚠ Check is taking longer than expected — it's still running in the background. Refresh the page in a few minutes.");
+          return;
+        }
+
+        try {
+          const statusRes = await fetch(`/api/jobs/check-status/${job_id}`);
+          const statusData = await statusRes.json();
+
+          if (statusData.status === "running") return; // still going, keep polling
+
+          clearInterval(pollIntervalRef.current!);
+          setManualCheckLoading(false);
+          await fetchCompanies();
+
+          if (statusData.status === "complete") {
+            const found = statusData.result?.new_postings ?? 0;
+            const remaining = checks_remaining;
+            setManualCheckResult(
+              `✓ Check complete — ${found} new posting${found !== 1 ? "s" : ""} found.` +
+              (remaining < 999 ? ` ${remaining} check${remaining !== 1 ? "s" : ""} remaining this month.` : "")
+            );
+          } else if (statusData.status === "lost") {
+            // FastAPI restarted mid-check — job may have partially completed
+            setManualCheckResult("✓ Check finished — refresh the job feed to see new results.");
+          } else {
+            setManualCheckResult(`Error: ${statusData.error ?? "Check failed"}`);
+          }
+        } catch {
+          // Transient network error — keep polling
+        }
+      }, 4000);
+
     } catch {
       setManualCheckResult("Check failed — FastAPI backend may not be running.");
-    } finally {
       setManualCheckLoading(false);
     }
   };
