@@ -13,5 +13,5 @@ export default async function Home() {
     redirect("/onboarding");
   }
 
-  redirect("/dashboard/profile");
+  redirect("/dashboard");
 }

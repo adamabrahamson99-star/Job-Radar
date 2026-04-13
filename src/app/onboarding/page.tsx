@@ -76,11 +76,11 @@ export default function OnboardingPage() {
 
       // Update the session
       await update();
-      router.push("/dashboard/profile");
+      router.push("/dashboard");
     } catch (error) {
       console.error("Failed to complete onboarding:", error);
       // Still redirect even if save failed
-      router.push("/dashboard/profile");
+      router.push("/dashboard");
     } finally {
       setCompleting(false);
     }

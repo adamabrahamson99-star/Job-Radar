@@ -66,9 +66,9 @@ export function DashboardShell({ children }: DashboardShellProps) {
     "text-text-muted";
 
   return (
-    <div className="min-h-screen bg-radar-base flex">
+    <div className="h-screen overflow-hidden bg-radar-base flex">
       {/* Sidebar */}
-      <aside className="w-[220px] flex-shrink-0 border-r border-radar-border bg-radar-surface flex flex-col">
+      <aside className="w-[220px] flex-shrink-0 border-r border-radar-border bg-radar-surface flex flex-col h-full">
         {/* Logo */}
         <div className="h-14 px-5 flex items-center border-b border-radar-border">
           <RadarLogo size="sm" />
