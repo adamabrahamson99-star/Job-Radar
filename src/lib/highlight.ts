@@ -17,7 +17,7 @@ export function highlightTerms(
 
   if (escaped.length === 0) return [{ text, isHighlight: false }];
 
-  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
+  const pattern = new RegExp(`(\\b(?:${escaped.join("|")})\\b)`, "gi");
   const parts = text.split(pattern);
 
   const lowerTerms = terms.map((t) => t.toLowerCase());
