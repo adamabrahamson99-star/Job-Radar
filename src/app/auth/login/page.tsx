@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -18,27 +18,6 @@ export default function LoginPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [globalError, setGlobalError] = useState("");
-
-  // Auto-seed demo data if DB is empty
-  useEffect(() => {
-    fetch("/api/seed")
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d.seeded) {
-          fetch("/api/seed", { method: "POST" })
-            .then((r) => r.json())
-            .then((data) => {
-              if (data.ok) {
-                setGlobalError(""); // clear any errors
-                console.log("Demo data seeded:", data.credentials);
-              }
-            })
-            .catch(() => {});
-        }
-      })
-      .catch(() => {});
-  }, []);
-
 
   const validate = () => {
     const errs: Record<string, string> = {};
@@ -185,14 +164,6 @@ export default function LoginPage() {
           </form>
 
 
-          {/* Demo credentials */}
-          <div className="mt-4 p-3 rounded-lg bg-radar-elevated border border-radar-border text-center">
-            <p className="text-xs text-text-muted mb-1 font-mono">DEMO CREDENTIALS</p>
-            <p className="text-xs text-text-secondary">
-              <span className="font-mono text-blue-400">demo@radar.app</span> /{' '}
-              <span className="font-mono text-blue-400">Demo1234!</span>
-            </p>
-          </div>
           <div className="mt-6 pt-6 border-t border-radar-border text-center">
             <p className="text-sm text-text-secondary">
               Don&apos;t have an account?{" "}

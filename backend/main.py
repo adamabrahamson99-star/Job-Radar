@@ -17,13 +17,6 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Radar FastAPI backend starting...")
 
-    # Auto-seed demo data if DB is empty
-    try:
-        from seed_demo import seed_database
-        seed_database()
-    except Exception as e:
-        print(f"⚠️  Auto-seed skipped: {e}")
-
     try:
         from scheduler import bootstrap_scheduler
         bootstrap_scheduler()
