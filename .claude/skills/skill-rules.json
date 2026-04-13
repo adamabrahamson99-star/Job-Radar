@@ -1,0 +1,219 @@
+{
+    "version": "1.0",
+    "description": "Skill activation triggers for Job Radar. Controls when skills automatically suggest actions.",
+    "skills": {
+        "skill-developer": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Meta-skill for creating and managing Claude skills",
+            "promptTriggers": {
+                "keywords": [
+                    "skill system",
+                    "create skill",
+                    "add skill",
+                    "skill triggers",
+                    "skill rules",
+                    "hook system",
+                    "skill development",
+                    "skill-rules.json"
+                ],
+                "intentPatterns": [
+                    "(how do|how does|explain).*?skill",
+                    "(create|add|modify|build).*?skill",
+                    "skill.*?(work|trigger|activate|system)"
+                ]
+            }
+        },
+        "backend-dev-guidelines": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Backend development patterns for Job Radar's FastAPI/Python backend",
+            "promptTriggers": {
+                "keywords": [
+                    "backend",
+                    "fastapi",
+                    "router",
+                    "endpoint",
+                    "api route",
+                    "python",
+                    "prisma",
+                    "database",
+                    "scraper",
+                    "pipeline",
+                    "scheduler",
+                    "pydantic",
+                    "background task",
+                    "jobs runner"
+                ],
+                "intentPatterns": [
+                    "(create|add|implement|build).*?(route|endpoint|API|router|scraper|scheduler)",
+                    "(fix|handle|debug).*?(error|exception|backend|fastapi)",
+                    "(add|implement).*?(middleware|validation|background task)",
+                    "(organize|structure|refactor).*?(backend|api|pipeline)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "backend/**/*.py",
+                    "backend/routers/**/*.py",
+                    "backend/pipeline.py",
+                    "backend/scraper.py",
+                    "backend/scheduler.py",
+                    "backend/jobs_runner.py"
+                ],
+                "pathExclusions": [
+                    "**/*_test.py",
+                    "**/test_*.py"
+                ],
+                "contentPatterns": [
+                    "@router\\.",
+                    "@app\\.",
+                    "async def ",
+                    "from fastapi",
+                    "prisma\\."
+                ]
+            }
+        },
+        "frontend-dev-guidelines": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Frontend patterns for Job Radar's Next.js 14 + Tailwind + TypeScript stack",
+            "promptTriggers": {
+                "keywords": [
+                    "component",
+                    "react component",
+                    "UI",
+                    "page",
+                    "dashboard",
+                    "tailwind",
+                    "next.js",
+                    "typescript",
+                    "frontend",
+                    "form",
+                    "modal",
+                    "tab",
+                    "sidebar"
+                ],
+                "intentPatterns": [
+                    "(create|add|make|build|update|modify|edit).*?(component|UI|page|modal|form|tab)",
+                    "(how to|best practice).*?(component|react|tailwind|next)",
+                    "(style|design|layout).*?(component|UI|dashboard)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "src/**/*.tsx",
+                    "src/**/*.ts",
+                    "src/app/**/*.tsx",
+                    "src/components/**/*.tsx",
+                    "src/lib/**/*.ts"
+                ],
+                "pathExclusions": [
+                    "**/*.test.tsx",
+                    "**/*.test.ts",
+                    "**/*.spec.tsx",
+                    "**/*.spec.ts",
+                    "**/tsconfig.json"
+                ],
+                "contentPatterns": [
+                    "from 'react'",
+                    "\"use client\"",
+                    "className=",
+                    "export default function"
+                ]
+            }
+        },
+        "route-tester": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Testing Next.js API routes and FastAPI endpoints with NextAuth session auth",
+            "promptTriggers": {
+                "keywords": [
+                    "test route",
+                    "test endpoint",
+                    "test API",
+                    "route testing",
+                    "API testing",
+                    "authenticated route",
+                    "nextauth testing",
+                    "session auth",
+                    "test with auth"
+                ],
+                "intentPatterns": [
+                    "(test|debug|verify).*?(route|endpoint|API)",
+                    "(how to|how do I).*?test.*?(route|endpoint|API)",
+                    "test.*?(authenticated|auth|session|next-auth)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "src/app/api/**/*.ts",
+                    "backend/routers/**/*.py"
+                ],
+                "contentPatterns": [
+                    "getServerSession",
+                    "NextResponse",
+                    "@router\\.(get|post|put|delete|patch)"
+                ]
+            }
+        },
+        "error-tracking": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Error handling, logging, and monitoring patterns for Job Radar",
+            "promptTriggers": {
+                "keywords": [
+                    "error handling",
+                    "exception",
+                    "error tracking",
+                    "monitoring",
+                    "logging",
+                    "try catch",
+                    "error boundary"
+                ],
+                "intentPatterns": [
+                    "(add|create|implement|setup).*?(error handling|error tracking|logging)",
+                    "(fix|handle|catch).*?(error|exception)",
+                    "(how to|best practice).*?(error|monitoring|logging)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "backend/**/*.py",
+                    "src/**/*.ts",
+                    "src/**/*.tsx"
+                ],
+                "contentPatterns": [
+                    "try:",
+                    "except ",
+                    "try {",
+                    "catch (",
+                    "console\\.error"
+                ]
+            }
+        }
+    },
+    "notes": {
+        "enforcement_types": {
+            "suggest": "Skill suggestion appears but does not block execution",
+            "block": "Requires skill to be used before proceeding (guardrail)",
+            "warn": "Shows warning but allows proceeding"
+        },
+        "priority_levels": {
+            "critical": "Highest - Always trigger when matched",
+            "high": "Important - Trigger for most matches",
+            "medium": "Moderate - Trigger for clear matches",
+            "low": "Optional - Trigger only for explicit matches"
+        },
+        "project_structure": {
+            "backend": "backend/ — FastAPI (Python)",
+            "frontend": "src/ — Next.js 14 App Router (TypeScript)",
+            "database": "prisma/ — Prisma ORM + PostgreSQL"
+        }
+    }
+}
