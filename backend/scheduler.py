@@ -1,21 +1,32 @@
 """
-Radar — APScheduler bootstrap.
+Radar - APScheduler bootstrap.
 
 Schedules per-user job-check runs based on subscription tier.
 
 Tier cadences (start times staggered across a 2-hour window via sha256(user_id)):
-  STARTER   → Mon + Thu  at 07:xx UTC
-  PRO       → Daily      at 07:xx UTC
-  TRIALING  → Daily      at 07:xx UTC  (treated the same as PRO)
-  UNLIMITED → Every 6 h  (start time offset by user_id hash)
-  FREE      → No schedule (manual checks only)
+  STARTER   -> Mon + Thu  at 07:xx UTC
+  PRO       -> Daily      at 07:xx UTC
+  TRIALING  -> Daily      at 07:xx UTC  (same cadence as PRO)
+  UNLIMITED -> Every 6 h  (first run offset by user_id hash)
+  FREE      -> No schedule (manual checks only)
+
+Master on/off switch:
+  Set SCHEDULER_ENABLED=true in Railway env vars to activate automated checks.
+  Defaults to false so dev environments and demo accounts never burn tokens.
+
+Per-account exclusions:
+  Set SCHEDULER_EXCLUDED_EMAILS=demo@radar.app,test@example.com to prevent
+  specific accounts from being scheduled even when SCHEDULER_ENABLED=true.
+  Use this to protect demo and internal test accounts.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
-from datetime import datetime, timezone, timedelta
+import os
+import threading
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -24,160 +35,215 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-# ── Singleton ────────────────────────────────────────────────────────────────
+# ── Singleton ──────────────────────────────────────────────────────────────────
 
 _scheduler: BackgroundScheduler | None = None
+_scheduler_lock = threading.Lock()
 
 
 def get_scheduler() -> BackgroundScheduler:
-    """Return the module-level BackgroundScheduler, creating it on first call."""
     global _scheduler
-    if _scheduler is None:
-        _scheduler = BackgroundScheduler(timezone="UTC")
-    return _scheduler
+    with _scheduler_lock:
+        if _scheduler is None:
+            _scheduler = BackgroundScheduler(timezone="UTC")
+        return _scheduler
 
 
-# ── Stagger helpers ──────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _stagger_minutes(user_id: str) -> int:
-    """Return a deterministic 0–119 minute offset derived from user_id."""
-    digest = int(hashlib.sha256(user_id.encode()).hexdigest(), 16)
-    return digest % 120
-
-
-def _offset_hour_minute(base_hour: int, extra_minutes: int) -> tuple[int, int]:
-    """Add extra_minutes to base_hour and return (hour, minute) with day rollover."""
-    total = base_hour * 60 + extra_minutes
-    return (total // 60) % 24, total % 60
+def _minute_offset(user_id: str) -> int:
+    """
+    Derive a stable 0-119 minute offset from the user's ID so checks for
+    different users are staggered across a 2-hour window rather than all
+    firing at exactly 07:00 UTC.
+    """
+    digest = hashlib.sha256(user_id.encode()).hexdigest()
+    return int(digest[:8], 16) % 120
 
 
-# ── Trigger factory ──────────────────────────────────────────────────────────
-
-def _make_trigger(tier: str, offset_minutes: int):
-    """Return an APScheduler trigger for the given tier, or None for FREE."""
-    if tier == "STARTER":
-        h, m = _offset_hour_minute(7, offset_minutes)
-        return CronTrigger(day_of_week="mon,thu", hour=h, minute=m, timezone="UTC")
-
-    if tier in ("PRO", "TRIALING"):
-        h, m = _offset_hour_minute(7, offset_minutes)
-        return CronTrigger(day_of_week="*", hour=h, minute=m, timezone="UTC")
-
-    if tier == "UNLIMITED":
-        # Every 6 hours; stagger the first fire within the next 6-hour window.
-        now = datetime.now(timezone.utc)
-        # Anchor: midnight UTC today + user's offset
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=offset_minutes)
-        # Advance to the next future slot
-        while start <= now:
-            start += timedelta(hours=6)
-        return IntervalTrigger(hours=6, start_date=start, timezone="UTC")
-
-    return None  # FREE or unknown — no schedule
+def _is_scheduler_enabled() -> bool:
+    return os.getenv("SCHEDULER_ENABLED", "false").strip().lower() == "true"
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+def _excluded_emails() -> set[str]:
+    raw = os.getenv("SCHEDULER_EXCLUDED_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _job_id(user_id: str) -> str:
+    return f"check_{user_id}"
+
+
+# ── Per-user scheduling ────────────────────────────────────────────────────────
+
+def _run_check_sync(user_id: str) -> None:
+    """
+    Sync wrapper called by APScheduler's thread pool.
+    Creates a fresh event loop for each run so async code works correctly
+    inside APScheduler's threaded BackgroundScheduler.
+    """
+    try:
+        from jobs_runner import check_user_jobs
+        result = check_user_jobs(user_id)
+        new = result.get("new_postings", 0)
+        errors = result.get("errors", [])
+        logger.info("[SCHEDULER] user=%s new_postings=%d errors=%d", user_id, new, len(errors))
+        for err in errors:
+            logger.warning("[SCHEDULER] user=%s error: %s", user_id, err)
+    except Exception as e:
+        logger.error("[SCHEDULER] Fatal error for user %s: %s", user_id, e)
+
 
 def schedule_user(user_id: str, tier: str) -> None:
     """
-    Register (or replace) the automated check job for a user.
-
-    Safe to call at any time — removes any existing job first so this is
-    idempotent. Called on startup (bootstrap) and whenever a user's tier
-    changes (POST /api/jobs/trigger-schedule-update).
+    Add or replace the scheduled job for a single user based on their tier.
+    Called at bootstrap and whenever a user's subscription changes.
+    Silently no-ops when SCHEDULER_ENABLED=false.
     """
-    scheduler = get_scheduler()
-    job_id = f"check_{user_id}"
+    if not _is_scheduler_enabled():
+        return
 
-    # Remove existing job first (idempotent re-schedule)
+    scheduler = get_scheduler()
+    job_id = _job_id(user_id)
+
+    # Remove any existing job for this user first
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
 
     if tier == "FREE":
-        logger.info("scheduler: user %s is FREE — no automated check registered", user_id)
+        # FREE tier has no automated schedule
         return
 
-    offset = _stagger_minutes(user_id)
-    trigger = _make_trigger(tier, offset)
-    if trigger is None:
-        return
+    offset = _minute_offset(user_id)
+    hour = 7 + offset // 60
+    minute = offset % 60
 
-    from jobs_runner import check_user_jobs
+    if tier == "STARTER":
+        scheduler.add_job(
+            _run_check_sync,
+            trigger=CronTrigger(day_of_week="mon,thu", hour=hour, minute=minute, timezone="UTC"),
+            args=[user_id],
+            id=job_id,
+            replace_existing=True,
+            misfire_grace_time=3600,  # 1 hour tolerance for missed fires
+        )
+        logger.info(
+            "[SCHEDULER] STARTER user=%s scheduled Mon+Thu at %02d:%02d UTC",
+            user_id, hour, minute,
+        )
 
-    scheduler.add_job(
-        check_user_jobs,
-        trigger=trigger,
-        id=job_id,
-        name=f"job-check:{user_id} ({tier})",
-        args=[user_id],
-        misfire_grace_time=3600,  # tolerate up to 1 h of downtime before skipping
-        coalesce=True,            # collapse multiple missed fires into one
-        replace_existing=True,
-    )
-    logger.info(
-        "scheduler: registered user %s (%s) with +%d min stagger",
-        user_id, tier, offset,
-    )
+    elif tier in ("PRO", "TRIALING"):
+        scheduler.add_job(
+            _run_check_sync,
+            trigger=CronTrigger(hour=hour, minute=minute, timezone="UTC"),
+            args=[user_id],
+            id=job_id,
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(
+            "[SCHEDULER] %s user=%s scheduled daily at %02d:%02d UTC",
+            tier, user_id, hour, minute,
+        )
+
+    elif tier == "UNLIMITED":
+        # Every 6 hours; start time offset by user_id hash so they don't all
+        # fire at the same time
+        start_minute = offset % 60
+        start_hour = offset // 60  # 0 or 1
+        scheduler.add_job(
+            _run_check_sync,
+            trigger=IntervalTrigger(hours=6, start_date=f"2000-01-01 0{start_hour}:{start_minute:02d}:00"),
+            args=[user_id],
+            id=job_id,
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(
+            "[SCHEDULER] UNLIMITED user=%s scheduled every 6h (offset %dm)",
+            user_id, offset,
+        )
 
 
 def unschedule_user(user_id: str) -> None:
-    """Remove a user's scheduled job (on account deletion or FREE downgrade)."""
+    """Remove a user's scheduled job. Called on subscription cancellation."""
     scheduler = get_scheduler()
-    job_id = f"check_{user_id}"
+    job_id = _job_id(user_id)
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
-        logger.info("scheduler: unscheduled user %s", user_id)
+        logger.info("[SCHEDULER] Removed job for user=%s", user_id)
 
+
+# ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 def bootstrap_scheduler() -> None:
     """
-    Called once at FastAPI startup via the lifespan handler in main.py.
+    Called once on FastAPI startup (main.py lifespan).
 
-    1. Queries all users with an active paid tier from the DB.
-    2. Registers a scheduled job for each.
-    3. Starts the BackgroundScheduler thread.
+    When SCHEDULER_ENABLED=false (default), logs a message and returns
+    immediately without starting the scheduler or touching the DB.
+    This is the safe default for dev environments and demo accounts.
+
+    When SCHEDULER_ENABLED=true, loads all eligible users from the DB
+    and registers their scheduled jobs, then starts the scheduler.
     """
-    scheduler = get_scheduler()
-    if scheduler.running:
-        logger.warning("bootstrap_scheduler called on an already-running scheduler — skipping")
+    if not _is_scheduler_enabled():
+        logger.info(
+            "[SCHEDULER] Disabled (SCHEDULER_ENABLED != true). "
+            "Set SCHEDULER_ENABLED=true on Railway to activate automated checks."
+        )
         return
 
+    excluded = _excluded_emails()
+    if excluded:
+        logger.info("[SCHEDULER] Excluded emails: %s", ", ".join(sorted(excluded)))
+
     # Load all users who should have automated checks
-    rows = []
     try:
         from database import get_db
-
         db_gen = get_db()
         db = next(db_gen)
-        try:
-            rows = db.execute(
-                text(
-                    "SELECT id, subscription_tier FROM users "
-                    "WHERE subscription_status IN ('ACTIVE', 'TRIALING') "
-                    "AND subscription_tier != 'FREE'"
-                )
-            ).fetchall()
-        finally:
-            try:
-                next(db_gen)
-            except StopIteration:
-                pass
-    except Exception as exc:
-        logger.warning("bootstrap_scheduler: could not load users from DB — %s", exc)
 
-    registered = 0
-    for row in rows:
-        try:
-            schedule_user(row.id, row.subscription_tier)
-            registered += 1
-        except Exception as exc:
-            logger.error(
-                "bootstrap_scheduler: failed to schedule user %s — %s", row.id, exc
+        rows = db.execute(
+            text(
+                "SELECT id, email, subscription_tier, subscription_status "
+                "FROM users "
+                "WHERE subscription_tier IN ('STARTER', 'PRO', 'UNLIMITED') "
+                "AND subscription_status IN ('ACTIVE', 'TRIALING')"
             )
+        ).fetchall()
 
-    scheduler.start()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to load users from DB: %s", e)
+        return
+
+    scheduler = get_scheduler()
+    scheduled_count = 0
+
+    for row in rows:
+        user_id = str(row.id)
+        email = (row.email or "").lower()
+        tier = row.subscription_tier
+
+        if email in excluded:
+            logger.info("[SCHEDULER] Skipping excluded account: %s", email)
+            continue
+
+        # Treat TRIALING users the same as PRO for scheduling purposes
+        effective_tier = "PRO" if row.subscription_status == "TRIALING" else tier
+        schedule_user(user_id, effective_tier)
+        scheduled_count += 1
+
+    if not scheduler.running:
+        scheduler.start()
+
     logger.info(
-        "APScheduler started — %d job(s) registered across %d user(s) loaded from DB",
-        len(scheduler.get_jobs()),
-        registered,
+        "[SCHEDULER] Started. %d user(s) scheduled. EXCLUDED=%d account(s).",
+        scheduled_count,
+        len(excluded),
     )
