@@ -249,7 +249,7 @@ export function getRecommendations(
   const scored = COMPANY_CATALOG
     .filter((c) => !existingSet.has(normalize(c.name)))
     .map((c) => {
-      const overlap = c.tags.filter((t) => kwSet.has(t) || [...kwSet].some((k) => t.includes(k) || k.includes(t))).length;
+      const overlap = c.tags.filter((t) => kwSet.has(t) || Array.from(kwSet).some((k) => t.includes(k) || k.includes(t))).length;
       const atsBonus = c.ats_source ? 1 : 0;
       return { company: c, score: overlap + atsBonus };
     })
