@@ -74,6 +74,19 @@ _LOAD_MORE_SELECTORS = [
     "a:has-text('Show more')",
 ]
 
+# Title patterns that indicate a category/department listing page rather than
+# a single job posting. Link text like "Engineering & QA565 available jobs"
+# (count concatenated with text by missing whitespace) or
+# "Professional Services – 247 Available Jobs" are never real job titles.
+_CATEGORY_TITLE_RE = re.compile(
+    r"\d+\s*available\s+jobs?"          # "247 available jobs" / "247available jobs"
+    r"|\d+\s+open\s+positions?"          # "120 open positions"
+    r"|\d+\s+job\s+openings?"            # "34 job openings"
+    r"|^all\s+(jobs?|positions?|openings?)\s*$"  # "All Jobs"
+    r"|jobs?\s+in\s+\w",                 # "Jobs in Engineering"
+    re.IGNORECASE,
+)
+
 # Keywords that validate a page is a real job posting (for content sampling)
 _JOB_PAGE_SIGNALS = [
     r"\bapply\b",
@@ -921,13 +934,20 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
                 job_url_set |= dom_urls
 
                 # Layer 4 — is_child_of_base supplement
+                # Only add URLs that match the cluster templates already established by
+                # Layer 2. Without this guard, broad category/department listing pages
+                # (e.g. /c/engineering-qa-jobs on HPE) would be accepted because they
+                # share the same base path as real job postings. If no templates were
+                # found yet we fall back to the original behaviour.
                 base_path = urlparse(url).path.rstrip("/")
                 if "." in base_path.split("/")[-1]:
                     base_path = base_path.rsplit("/", 1)[0]
                 for full_url, _, _ in raw_candidates:
                     if full_url not in job_url_set:
-                        if base_path and urlparse(full_url).path.startswith(base_path + "/"):
-                            job_url_set.add(full_url)
+                        candidate_path = urlparse(full_url).path.rstrip("/")
+                        if base_path and candidate_path.startswith(base_path + "/"):
+                            if not known_templates or _url_template(candidate_path) in known_templates:
+                                job_url_set.add(full_url)
 
                 # Layer 5 — Content sampling validation
                 sample = [u for u in list(job_url_set)[:3]]
@@ -955,6 +975,12 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
             # ── 7. Build result dicts ─────────────────────────────────────────
             for full_url, text, link in raw_candidates:
                 if full_url not in job_url_set:
+                    continue
+
+                # Reject category/department listing pages whose link text contains
+                # a job count (e.g. "Engineering & QA565 available jobs").
+                if _CATEGORY_TITLE_RE.search(text):
+                    print(f"[SCRAPER] {company_name}: skipping category page — {text!r}")
                     continue
 
                 location = jsonld_location_map.get(full_url)
