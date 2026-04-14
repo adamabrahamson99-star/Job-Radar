@@ -112,6 +112,9 @@ model Company {
   last_checked_at DateTime?
   posting_count   Int        @default(0)
   created_at      DateTime   @default(now())
+  // Layered sourcing: if set, jobs_runner uses the ATS API instead of the scraper
+  ats_source      AtsSource?
+  ats_slug        String?
 
   job_postings JobPosting[]
 

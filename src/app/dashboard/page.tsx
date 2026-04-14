@@ -10,6 +10,8 @@ import { DEFAULT_FILTERS, isDefaultFilters } from "@/types/jobs";
 
 const PAGE_SIZE = 20;
 
+type DashboardView = "all" | "watchlist" | "discovery";
+
 // ─── Stats bar ────────────────────────────────────────────────────────────────
 
 function StatsBar({ stats }: { stats: JobStats | null }) {
@@ -307,9 +309,11 @@ export default function DashboardPage() {
   const [highValueSkills, setHighValueSkills] = useState<string[]>([]);
   const [highValueTitles, setHighValueTitles] = useState<string[]>([]);
 
+  const [dashView, setDashView] = useState<DashboardView>("all");
+
   // Build API query params from filters
   const buildParams = useCallback(
-    (f: JobFilters, p: number) => {
+    (f: JobFilters, p: number, view: DashboardView) => {
       const params = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
       if (f.search) params.set("search", f.search);
       if (f.role_categories.length) params.set("role_category", f.role_categories.join(","));
@@ -318,6 +322,7 @@ export default function DashboardPage() {
       if (f.sources.length) params.set("source", f.sources.join(","));
       if (f.statuses.length) params.set("status", f.statuses.join(","));
       params.set("sort", f.sort);
+      if (view !== "all") params.set("view", view);
       return params.toString();
     },
     []
@@ -325,10 +330,10 @@ export default function DashboardPage() {
 
   // Fetch jobs
   const fetchJobs = useCallback(
-    async (f: JobFilters, p: number) => {
+    async (f: JobFilters, p: number, view: DashboardView = "all") => {
       setLoading(true);
       try {
-        const qs = buildParams(f, p);
+        const qs = buildParams(f, p, view);
         const res = await fetch(`/api/jobs?${qs}`);
         const data = await res.json();
         if (res.ok) {
@@ -399,10 +404,10 @@ export default function DashboardPage() {
     fetchProfile();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-fetch when filters/page change
+  // Re-fetch when filters/page/view change
   useEffect(() => {
-    fetchJobs(filters, page);
-  }, [filters, page]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchJobs(filters, page, dashView);
+  }, [filters, page, dashView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-dismiss banner after 30 seconds
   useEffect(() => {
@@ -425,6 +430,11 @@ export default function DashboardPage() {
 
   const handleFilterChange = (f: JobFilters) => {
     setFilters(f);
+    setPage(1);
+  };
+
+  const handleViewChange = (v: DashboardView) => {
+    setDashView(v);
     setPage(1);
   };
 
@@ -459,10 +469,30 @@ export default function DashboardPage() {
     <div className="h-screen flex flex-col overflow-hidden">
       {/* Top bar */}
       <header className="flex-shrink-0 h-14 border-b border-radar-border bg-radar-surface/80 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <h1 className="text-sm font-semibold text-text-primary" style={{ fontFamily: "Syne, sans-serif" }}>
             Job Feed
           </h1>
+
+          {/* Watchlist / Discovery view toggle */}
+          <div className="flex gap-0.5 bg-radar-elevated border border-radar-border rounded-lg p-0.5">
+            {(["all", "watchlist", "discovery"] as DashboardView[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => handleViewChange(v)}
+                className={cn(
+                  "px-3 py-1 rounded-md text-xs font-medium transition-all duration-150 capitalize",
+                  dashView === v
+                    ? "bg-radar-surface text-text-primary shadow-sm"
+                    : "text-text-muted hover:text-text-secondary"
+                )}
+                data-testid={`view-toggle-${v}`}
+              >
+                {v === "all" ? "All" : v === "watchlist" ? "Watchlist" : "Discovery"}
+              </button>
+            ))}
+          </div>
+
           {checkRunning && (
             <div className="flex items-center gap-1.5 text-xs text-blue-400">
               <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/route-auth";
 import { TIER_COMPANY_LIMITS } from "@/lib/tier";
 import { backendFetch } from "@/lib/backend-fetch";
+import { findCatalogCompany, atsCareerUrl } from "@/lib/company-catalog";
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth();
@@ -22,10 +23,43 @@ export async function POST(req: NextRequest) {
   if (auth instanceof NextResponse) return auth;
   const { userId, tier } = auth;
 
-  const { company_name, career_page_url } = await req.json();
+  const body = await req.json();
+  const company_name: string = body.company_name ?? "";
+  // Optional when adding from catalog — auto-generated from ATS info
+  let career_page_url: string = body.career_page_url ?? "";
+  // Layered sourcing: pre-resolved by the frontend when adding from the catalog
+  const ats_source: string | undefined = body.ats_source;
+  const ats_slug: string | undefined   = body.ats_slug;
 
-  if (!company_name?.trim() || !career_page_url?.trim()) {
-    return NextResponse.json({ error: "Company name and URL are required" }, { status: 400 });
+  if (!company_name.trim()) {
+    return NextResponse.json({ error: "Company name is required" }, { status: 400 });
+  }
+
+  // ── Layered sourcing: resolve ATS info ────────────────────────────────────
+  // Priority 1: explicit ats_source/ats_slug from the catalog UI
+  // Priority 2: auto-lookup in the catalog by name (manual adds)
+  // Priority 3: fall back to the user-supplied URL (legacy scraper path)
+  let resolvedAtsSource = ats_source ?? null;
+  let resolvedAtsSlug   = ats_slug ?? null;
+
+  if (!resolvedAtsSource) {
+    const catalogMatch = findCatalogCompany(company_name.trim());
+    if (catalogMatch?.ats_source) {
+      resolvedAtsSource = catalogMatch.ats_source;
+      resolvedAtsSlug   = catalogMatch.ats_slug ?? null;
+    }
+  }
+
+  // Auto-generate career_page_url from ATS info if not provided
+  if (!career_page_url.trim() && resolvedAtsSource && resolvedAtsSlug) {
+    career_page_url = atsCareerUrl(resolvedAtsSource as any, resolvedAtsSlug);
+  }
+
+  if (!career_page_url.trim()) {
+    return NextResponse.json(
+      { error: "Career page URL is required for companies not in our catalog" },
+      { status: 400 }
+    );
   }
 
   // URL validation
@@ -53,7 +87,13 @@ export async function POST(req: NextRequest) {
   }
 
   const company = await prisma.company.create({
-    data: { user_id: userId, company_name: company_name.trim(), career_page_url: career_page_url.trim() },
+    data: {
+      user_id: userId,
+      company_name: company_name.trim(),
+      career_page_url: career_page_url.trim(),
+      ats_source: resolvedAtsSource as any ?? undefined,
+      ats_slug: resolvedAtsSlug ?? undefined,
+    },
   });
 
   // Fire-and-forget URL preview — provides early feedback without blocking the save.

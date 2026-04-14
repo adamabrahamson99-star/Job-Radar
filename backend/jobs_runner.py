@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from pipeline import ingest_posting, run_takedown_detection, _title_matches_profile
 from scraper import scrape_career_page, _enrich_locations
-from ats_clients import run_ats_discovery
+from ats_clients import run_ats_discovery, fetch_greenhouse, fetch_lever, fetch_ashby
 from utils import parse_json_field
 
 
@@ -61,24 +61,46 @@ async def _check_user_jobs_async(user_id: str) -> dict:
         profile = _get_user_profile(db, user_id)
         discovery = _get_discovery_settings(db, user_id)
 
-        # ── 1. Watchlist scraping ────────────────────────────────────────────
+        # ── 1. Watchlist scraping / ATS fetch ────────────────────────────────
         companies = db.execute(
             text(
-                "SELECT id, company_name, career_page_url FROM companies "
-                "WHERE user_id = :uid AND is_active = true"
+                "SELECT id, company_name, career_page_url, ats_source, ats_slug "
+                "FROM companies WHERE user_id = :uid AND is_active = true"
             ),
             {"uid": user_id},
         ).fetchall()
 
         for company in companies:
             try:
-                raw_jobs = await scrape_career_page(company.career_page_url, company.company_name)
+                # ── Layered sourcing: ATS client takes priority over scraper ──
+                # Companies added via the catalog have ats_source + ats_slug set.
+                # We call the appropriate ATS public API directly, which is faster
+                # and returns richer structured data than HTML scraping.
+                ats_source = getattr(company, "ats_source", None)
+                ats_slug   = getattr(company, "ats_slug", None)
+
+                if ats_source and ats_slug:
+                    if ats_source == "GREENHOUSE":
+                        raw_jobs = await fetch_greenhouse(ats_slug, company.company_name)
+                    elif ats_source == "LEVER":
+                        raw_jobs = await fetch_lever(ats_slug, company.company_name)
+                    elif ats_source == "ASHBY":
+                        raw_jobs = await fetch_ashby(ats_slug, company.company_name)
+                    else:
+                        raw_jobs = []
+                    # ATS jobs already carry structured location/description data;
+                    # skip HTTP-based location enrichment.
+                    job_source = ats_source          # "GREENHOUSE" | "LEVER" | "ASHBY"
+                    needs_enrichment = False
+                else:
+                    raw_jobs = await scrape_career_page(company.career_page_url, company.company_name)
+                    job_source = "WATCHLIST"
+                    needs_enrichment = True
 
                 # ── Title pre-filter before location enrichment ───────────────
-                # Only fire HTTP location requests for jobs that matched the
-                # candidate's target roles / high-value titles. Unmatched jobs
-                # (which will score 5 and appear at the bottom of the feed)
-                # keep "See posting" and skip enrichment entirely.
+                # Only fire HTTP location requests for scraper jobs that matched
+                # the candidate's target roles / high-value titles. ATS jobs
+                # already have location data so we skip enrichment for them.
                 matched_jobs = [
                     j for j in raw_jobs
                     if _title_matches_profile(j.get("title", ""), profile)
@@ -88,8 +110,7 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                     if not _title_matches_profile(j.get("title", ""), profile)
                 ]
 
-                # Enrich locations only for title-matched jobs
-                if matched_jobs:
+                if needs_enrichment and matched_jobs:
                     matched_jobs = await _enrich_locations(matched_jobs)
 
                 all_jobs = matched_jobs + unmatched_jobs
@@ -105,7 +126,7 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                         db=db,
                         user_id=user_id,
                         company_id=company.id,
-                        source="WATCHLIST",
+                        source=job_source,
                         raw=raw,
                         profile=profile,
                     )
@@ -127,7 +148,7 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                 total_new += new_count
 
             except Exception as e:
-                errors.append(f"Watchlist scrape error ({company.company_name}): {e}")
+                errors.append(f"Watchlist check error ({company.company_name}): {e}")
 
         # ── 2. ATS Discovery ─────────────────────────────────────────────────
         if any([

@@ -20,9 +20,18 @@ export async function GET(req: NextRequest) {
   const sourceParam = searchParams.get("source");
   const search = searchParams.get("search")?.trim();
   const sort = searchParams.get("sort") ?? "match_score";
+  // "watchlist" = jobs tied to user's watched companies; "discovery" = global ATS jobs
+  const view = searchParams.get("view"); // "watchlist" | "discovery" | null (= all)
 
   // Build where clause
   const where: any = { user_id: userId };
+
+  // View toggle: discriminated by whether company_id is set
+  if (view === "watchlist") {
+    where.company_id = { not: null };
+  } else if (view === "discovery") {
+    where.company_id = null;
+  }
 
   // Status filter — default hides NOT_INTERESTED
   if (statusParam && statusParam !== "ALL") {
