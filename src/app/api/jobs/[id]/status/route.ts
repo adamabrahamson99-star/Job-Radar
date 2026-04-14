@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/route-auth";
 
 const VALID_STATUSES = ["NEW", "SAVED", "APPLIED", "NOT_INTERESTED"] as const;
 type ValidStatus = (typeof VALID_STATUSES)[number];
@@ -10,10 +9,9 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const userId = (session.user as any).id;
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
   const { status } = await req.json();
 
   if (!VALID_STATUSES.includes(status as ValidStatus)) {

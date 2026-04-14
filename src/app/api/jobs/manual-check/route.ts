@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
-const MONTHLY_LIMIT = 3;
+import { requireAuth } from "@/lib/route-auth";
+import { MANUAL_CHECK_MONTHLY_LIMIT } from "@/lib/tier";
 
 /**
  * Kicks off a background job check via FastAPI and returns a job_id immediately.
@@ -11,11 +9,9 @@ const MONTHLY_LIMIT = 3;
  * FREE tier monthly limit is enforced before the check is started.
  */
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const userId = (session.user as any).id;
-  const tier = (session.user as any).subscriptionTier ?? "FREE";
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId, tier } = auth;
 
   // For FREE tier: enforce monthly limit
   if (tier === "FREE") {
@@ -41,11 +37,11 @@ export async function POST(req: NextRequest) {
       user.manual_checks_this_month = 0;
     }
 
-    if (user.manual_checks_this_month >= MONTHLY_LIMIT) {
+    if (user.manual_checks_this_month >= MANUAL_CHECK_MONTHLY_LIMIT) {
       return NextResponse.json(
         {
-          error: `Monthly manual check limit reached (${MONTHLY_LIMIT}/month). Upgrade to Starter for automated monitoring.`,
-          limit: MONTHLY_LIMIT,
+          error: `Monthly manual check limit reached (${MANUAL_CHECK_MONTHLY_LIMIT}/month). Upgrade to Starter for automated monitoring.`,
+          limit: MANUAL_CHECK_MONTHLY_LIMIT,
           used: user.manual_checks_this_month,
           upgrade_required: true,
         },
@@ -69,7 +65,7 @@ export async function POST(req: NextRequest) {
       : null;
 
   const checksRemaining = updatedUser
-    ? Math.max(0, MONTHLY_LIMIT - updatedUser.manual_checks_this_month)
+    ? Math.max(0, MANUAL_CHECK_MONTHLY_LIMIT - updatedUser.manual_checks_this_month)
     : 999;
 
   // Fire the background check — FastAPI returns a job_id immediately
@@ -85,7 +81,7 @@ export async function POST(req: NextRequest) {
         "X-Internal-Secret": internalSecret,
       },
       body: JSON.stringify({ user_id: userId }),
-      signal: AbortSignal.timeout(10000), // 10s — just enough to register the background task
+      signal: AbortSignal.timeout(10000),
     });
 
     if (resp.ok) {
@@ -98,7 +94,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // FastAPI returned an error status
     return NextResponse.json({
       ok: false,
       status: "error",
@@ -106,7 +101,6 @@ export async function POST(req: NextRequest) {
       checks_remaining: checksRemaining,
     });
   } catch {
-    // FastAPI not running or timed out
     return NextResponse.json({
       ok: false,
       status: "error",

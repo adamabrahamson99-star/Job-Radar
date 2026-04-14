@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from pipeline import ingest_posting, run_takedown_detection, _title_matches_profile
 from scraper import scrape_career_page, _enrich_locations
 from ats_clients import run_ats_discovery
+from utils import parse_json_field
 
 
 def _get_user_profile(db: Session, user_id: str) -> dict:
@@ -27,12 +28,7 @@ def _get_user_profile(db: Session, user_id: str) -> dict:
     if not row:
         return {}
     p = dict(row._mapping)
-    # Parse JSON education field
-    if isinstance(p.get("education"), str):
-        try:
-            p["education"] = json.loads(p["education"])
-        except Exception:
-            p["education"] = []
+    parse_json_field(p, "education", [])
     return p
 
 

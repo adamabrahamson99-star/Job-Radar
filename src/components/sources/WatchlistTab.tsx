@@ -4,13 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/utils";
-
-const TIER_LIMITS: Record<string, number> = {
-  FREE: 3,
-  STARTER: 15,
-  PRO: 50,
-  UNLIMITED: Infinity,
-};
+import { TIER_COMPANY_LIMITS } from "@/lib/tier";
 
 interface Company {
   id: string;
@@ -185,7 +179,7 @@ export function WatchlistTab({ tier }: WatchlistTabProps) {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
   }, []);
 
-  const limit = TIER_LIMITS[tier] ?? 3;
+  const limit = TIER_COMPANY_LIMITS[tier] ?? 3;
   const atLimit = limit !== Infinity && companies.length >= limit;
 
   const fetchCompanies = useCallback(async () => {

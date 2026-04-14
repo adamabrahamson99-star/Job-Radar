@@ -16,6 +16,7 @@ import anthropic
 
 from database import get_db
 from auth_utils import get_user_id_from_request
+from utils import parse_json_field
 
 router = APIRouter()
 
@@ -279,10 +280,6 @@ async def get_profile(
 
     profile = dict(row._mapping)
     # Parse JSON fields
-    if isinstance(profile.get("education"), str):
-        try:
-            profile["education"] = json.loads(profile["education"])
-        except Exception:
-            profile["education"] = []
+    parse_json_field(profile, "education", [])
 
     return JSONResponse(content={"profile": profile})

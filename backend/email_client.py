@@ -27,24 +27,15 @@ _EMAIL_FROM = os.getenv("EMAIL_FROM", "Radar <notifications@radar.app>")
 
 # ─── HTML helpers ─────────────────────────────────────────────────────────────
 
-def _score_letter(score: int) -> str:
+def _score_grade(score: int) -> tuple[str, str]:
+    """Return (letter_grade, badge_css_class) for a match score."""
     if score >= 80:
-        return "A"
+        return "A", "score-a"
     if score >= 60:
-        return "B"
+        return "B", "score-b"
     if score >= 40:
-        return "C"
-    return "D"
-
-
-def _score_badge_class(score: int) -> str:
-    if score >= 80:
-        return "score-a"
-    if score >= 60:
-        return "score-b"
-    if score >= 40:
-        return "score-c"
-    return "score-d"
+        return "C", "score-c"
+    return "D", "score-d"
 
 
 def _email_base(content: str) -> str:
@@ -149,8 +140,7 @@ def send_instant_alert(
     apply_url: str,
     salary_raw: str | None = None,
 ) -> bool:
-    grade = _score_letter(match_score)
-    badge_class = _score_badge_class(match_score)
+    grade, badge_class = _score_grade(match_score)
     salary_fragment = f" &middot; {salary_raw}" if salary_raw else ""
     explanation_fragment = (
         f'<p class="summary" style="color:#4A5878;">&#x2736; {match_explanation}</p>'
@@ -196,8 +186,7 @@ def send_digest(
     job_rows = ""
     for j in postings[:10]:
         score = j.get("match_score", 0)
-        grade = _score_letter(score)
-        badge_class = _score_badge_class(score)
+        grade, badge_class = _score_grade(score)
         salary_fragment = f" &middot; {j['salary_raw']}" if j.get("salary_raw") else ""
         raw_summary = j.get("description_summary") or ""
         # Show just the first sentence to keep cards compact

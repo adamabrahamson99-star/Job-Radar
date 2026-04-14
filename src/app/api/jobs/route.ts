@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/route-auth";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
 
-  const userId = (session.user as any).id;
   const { searchParams } = new URL(req.url);
 
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));
@@ -28,7 +27,6 @@ export async function GET(req: NextRequest) {
   // Status filter — default hides NOT_INTERESTED
   if (statusParam && statusParam !== "ALL") {
     where.status = statusParam;
-    // Show taken-down postings for APPLIED status
     if (statusParam !== "APPLIED") {
       where.is_active = true;
     }
@@ -36,7 +34,6 @@ export async function GET(req: NextRequest) {
     where.NOT = { status: "NOT_INTERESTED" };
     where.is_active = true;
   } else {
-    // ALL — only filter out inactive unless applied
     where.is_active = true;
   }
 
@@ -70,7 +67,6 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  // Sort
   let orderBy: any;
   switch (sort) {
     case "recent":
@@ -79,7 +75,7 @@ export async function GET(req: NextRequest) {
     case "company":
       orderBy = [{ company_name: "asc" }, { match_score: "desc" }];
       break;
-    default: // match_score
+    default:
       orderBy = [{ match_score: "desc" }, { first_seen_at: "desc" }];
   }
 

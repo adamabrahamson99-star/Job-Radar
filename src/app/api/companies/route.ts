@@ -1,20 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
-const TIER_COMPANY_LIMITS: Record<string, number> = {
-  FREE: 3,
-  STARTER: 15,
-  PRO: 50,
-  UNLIMITED: Infinity,
-};
+import { requireAuth } from "@/lib/route-auth";
+import { TIER_COMPANY_LIMITS } from "@/lib/tier";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
 
-  const userId = (session.user as any).id;
   const companies = await prisma.company.findMany({
     where: { user_id: userId },
     orderBy: { created_at: "desc" },
@@ -24,11 +17,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const userId = (session.user as any).id;
-  const tier = (session.user as any).subscriptionTier ?? "FREE";
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId, tier } = auth;
 
   const { company_name, career_page_url } = await req.json();
 
@@ -68,7 +59,7 @@ export async function POST(req: NextRequest) {
   // Non-blocking: company is already created above regardless of outcome.
   let preview: Record<string, unknown> | null = null;
   try {
-    const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
     const secret = process.env.INTERNAL_API_SECRET ?? "";
     const previewRes = await fetch(`${backendUrl}/api/jobs/validate-url`, {
       method: "POST",
@@ -78,7 +69,7 @@ export async function POST(req: NextRequest) {
         "X-Internal-User-ID": userId,
       },
       body: JSON.stringify({ url: career_page_url.trim() }),
-      signal: AbortSignal.timeout(20_000), // 20 s cap so UI isn't blocked long
+      signal: AbortSignal.timeout(20_000),
     });
     if (previewRes.ok) {
       preview = await previewRes.json();

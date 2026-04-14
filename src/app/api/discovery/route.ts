@@ -1,20 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
-const TIER_LOCATION_LIMITS: Record<string, number> = {
-  FREE: 0,
-  STARTER: 1,
-  PRO: 3,
-  UNLIMITED: Infinity,
-};
+import { requireAuth } from "@/lib/route-auth";
+import { TIER_LOCATION_LIMITS } from "@/lib/tier";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const userId = (session.user as any).id;
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
 
   const settings = await prisma.discoverySettings.findUnique({ where: { user_id: userId } });
 
@@ -39,11 +31,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const userId = (session.user as any).id;
-  const tier = (session.user as any).subscriptionTier ?? "FREE";
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId, tier } = auth;
 
   const body = await req.json();
 

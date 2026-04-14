@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuth } from "@/lib/route-auth";
 
 /**
  * Proxy for the FastAPI resume upload endpoint.
@@ -10,13 +9,9 @@ import { authOptions } from "@/lib/auth";
  * to FastAPI with internal auth headers so FastAPI never needs a JWT.
  */
 export async function POST(req: NextRequest) {
-  // Validate session server-side
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  }
-
-  const userId = (session.user as any).id;
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
   const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
 

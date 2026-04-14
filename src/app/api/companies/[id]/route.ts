@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/route-auth";
 
 async function getCompanyOrFail(id: string, userId: string) {
   const company = await prisma.company.findFirst({ where: { id, user_id: userId } });
@@ -9,10 +8,10 @@ async function getCompanyOrFail(id: string, userId: string) {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
 
-  const userId = (session.user as any).id;
   const company = await getCompanyOrFail(params.id, userId);
   if (!company) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -34,10 +33,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireAuth();
+  if (auth instanceof NextResponse) return auth;
+  const { userId } = auth;
 
-  const userId = (session.user as any).id;
   const company = await getCompanyOrFail(params.id, userId);
   if (!company) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
