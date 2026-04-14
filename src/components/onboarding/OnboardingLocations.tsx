@@ -8,9 +8,11 @@ interface OnboardingLocationsProps {
   locations: string[];
   includeRemote: boolean;
   includeHybrid: boolean;
+  includeOnSite: boolean;
   onLocationsChange: (locs: string[]) => void;
   onRemoteToggle: () => void;
   onHybridToggle: () => void;
+  onOnSiteToggle: () => void;
   onComplete: () => void;
   onSkip: () => void;
   completing: boolean;
@@ -53,14 +55,16 @@ export function OnboardingLocations({
   locations,
   includeRemote,
   includeHybrid,
+  includeOnSite,
   onLocationsChange,
   onRemoteToggle,
   onHybridToggle,
+  onOnSiteToggle,
   onComplete,
   onSkip,
   completing,
 }: OnboardingLocationsProps) {
-  const hasPreferences = locations.length > 0 || includeRemote || includeHybrid;
+  const hasPreferences = locations.length > 0 || includeRemote || includeHybrid || includeOnSite;
 
   return (
     <div>
@@ -84,7 +88,7 @@ export function OnboardingLocations({
       <div className="space-y-5 mb-8">
         {/* Work arrangement chips */}
         <div className="bg-radar-surface border border-radar-border rounded-xl p-5">
-          <h3 className="text-sm font-semibold text-text-primary mb-3">Work arrangement</h3>
+          <h3 className="text-sm font-semibold text-text-primary mb-3">Preferred working conditions</h3>
           <div className="flex gap-3 flex-wrap">
             <ToggleChip
               label="Remote"
@@ -103,6 +107,16 @@ export function OnboardingLocations({
               icon={
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              }
+            />
+            <ToggleChip
+              label="On-Site"
+              active={includeOnSite}
+              onClick={onOnSiteToggle}
+              icon={
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
               }
             />
@@ -126,7 +140,7 @@ export function OnboardingLocations({
 
         {hasPreferences && (
           <div className="bg-radar-elevated/50 border border-blue-500/20 rounded-xl p-4">
-            <p className="text-xs text-blue-400 font-mono mb-2">YOUR LOCATION PREFERENCES</p>
+            <p className="text-xs text-blue-400 font-mono mb-2">YOUR PREFERENCES</p>
             <div className="flex flex-wrap gap-1.5">
               {includeRemote && (
                 <span className="px-2 py-0.5 rounded-md text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20">
@@ -136,6 +150,11 @@ export function OnboardingLocations({
               {includeHybrid && (
                 <span className="px-2 py-0.5 rounded-md text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20">
                   Hybrid
+                </span>
+              )}
+              {includeOnSite && (
+                <span className="px-2 py-0.5 rounded-md text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                  On-Site
                 </span>
               )}
               {locations.map((loc) => (

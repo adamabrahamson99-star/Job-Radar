@@ -31,6 +31,7 @@ export default function OnboardingPage() {
     preferredLocations: [] as string[],
     includeRemote: false,
     includeHybrid: false,
+    includeOnSite: false,
   });
 
   const goNext = () => {
@@ -64,8 +65,9 @@ export default function OnboardingPage() {
             high_value_titles: profileData.highValueTitles,
             preferred_locations: [
               ...profileData.preferredLocations,
-              ...(profileData.includeRemote ? ["Remote"] : []),
-              ...(profileData.includeHybrid ? ["Hybrid"] : []),
+              ...(profileData.includeRemote  ? ["Remote"]  : []),
+              ...(profileData.includeHybrid  ? ["Hybrid"]  : []),
+              ...(profileData.includeOnSite  ? ["On-Site"] : []),
             ],
           }),
         });
@@ -165,20 +167,18 @@ export default function OnboardingPage() {
               locations={profileData.preferredLocations}
               includeRemote={profileData.includeRemote}
               includeHybrid={profileData.includeHybrid}
+              includeOnSite={profileData.includeOnSite}
               onLocationsChange={(locs) =>
                 setProfileData((d) => ({ ...d, preferredLocations: locs }))
               }
               onRemoteToggle={() =>
-                setProfileData((d) => ({
-                  ...d,
-                  includeRemote: !d.includeRemote,
-                }))
+                setProfileData((d) => ({ ...d, includeRemote: !d.includeRemote }))
               }
               onHybridToggle={() =>
-                setProfileData((d) => ({
-                  ...d,
-                  includeHybrid: !d.includeHybrid,
-                }))
+                setProfileData((d) => ({ ...d, includeHybrid: !d.includeHybrid }))
+              }
+              onOnSiteToggle={() =>
+                setProfileData((d) => ({ ...d, includeOnSite: !d.includeOnSite }))
               }
               onComplete={handleComplete}
               onSkip={handleComplete}

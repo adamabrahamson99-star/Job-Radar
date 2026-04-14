@@ -34,7 +34,7 @@ const EXPERIENCE_LEVELS = [
   { value: "STAFF", label: "Staff / Principal", desc: "10+ years" },
 ];
 
-const LOCATION_PRESETS = ["Remote", "Hybrid", "On-site"];
+const WORK_CONDITIONS = ["Remote", "Hybrid", "On-Site"];
 
 function SectionHeader({ title, desc, badge }: { title: string; desc?: string; badge?: string }) {
   return (
@@ -263,12 +263,12 @@ export default function ProfilePage() {
     }));
   };
 
-  const toggleLocationPreset = (preset: string) => {
+  const toggleWorkCondition = (condition: string) => {
     setProfile((p) => ({
       ...p,
-      preferred_locations: p.preferred_locations.includes(preset)
-        ? p.preferred_locations.filter((l) => l !== preset)
-        : [...p.preferred_locations, preset],
+      preferred_locations: p.preferred_locations.includes(condition)
+        ? p.preferred_locations.filter((l) => l !== condition)
+        : [...p.preferred_locations, condition],
     }));
   };
 
@@ -539,28 +539,29 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* Location Preferences */}
+        {/* Preferred Working Conditions */}
         <div className="bg-radar-surface border border-radar-border rounded-2xl p-6">
-          <SectionHeader title="Location preferences" desc="Cities, regions, and work arrangements" />
-
-          {/* Work arrangement toggles */}
-          <div className="flex gap-2 mb-4 flex-wrap">
-            {LOCATION_PRESETS.map((preset) => {
-              const active = profile.preferred_locations.includes(preset);
+          <SectionHeader
+            title="Preferred working conditions"
+            desc="Your preferred work arrangement"
+          />
+          <div className="flex gap-2 flex-wrap">
+            {WORK_CONDITIONS.map((condition) => {
+              const active = profile.preferred_locations.includes(condition);
               return (
                 <button
-                  key={preset}
+                  key={condition}
                   type="button"
-                  onClick={() => toggleLocationPreset(preset)}
+                  onClick={() => toggleWorkCondition(condition)}
                   className={cn(
                     "px-4 py-2 rounded-xl border text-sm font-medium transition-all",
                     active
                       ? "bg-blue-500/15 border-blue-500/50 text-blue-400"
                       : "bg-radar-elevated border-radar-border text-text-secondary hover:border-blue-500/30"
                   )}
-                  data-testid={`button-location-${preset.toLowerCase()}`}
+                  data-testid={`button-condition-${condition.toLowerCase().replace("-", "")}`}
                 >
-                  {preset}
+                  {condition}
                   {active && (
                     <svg className="inline w-3.5 h-3.5 ml-1.5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -570,21 +571,27 @@ export default function ProfilePage() {
               );
             })}
           </div>
+        </div>
 
-          {/* City input */}
+        {/* Location Preferences */}
+        <div className="bg-radar-surface border border-radar-border rounded-2xl p-6">
+          <SectionHeader
+            title="Location preferences"
+            desc="Cities and countries you're open to working in"
+          />
           <TagInput
-            tags={profile.preferred_locations.filter((l) => !LOCATION_PRESETS.includes(l))}
+            tags={profile.preferred_locations.filter((l) => !WORK_CONDITIONS.includes(l))}
             onChange={(locs) =>
               setProfile((p) => ({
                 ...p,
                 preferred_locations: [
-                  ...p.preferred_locations.filter((l) => LOCATION_PRESETS.includes(l)),
+                  ...p.preferred_locations.filter((l) => WORK_CONDITIONS.includes(l)),
                   ...locs,
                 ],
               }))
             }
-            placeholder="Add cities or regions..."
-            hint="San Francisco, New York, Austin, etc."
+            placeholder="Add cities or countries..."
+            hint="e.g. San Francisco, New York, London, Canada"
           />
         </div>
 
