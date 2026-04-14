@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/route-auth";
 import { TIER_COMPANY_LIMITS } from "@/lib/tier";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth();
@@ -59,15 +60,9 @@ export async function POST(req: NextRequest) {
   // Non-blocking: company is already created above regardless of outcome.
   let preview: Record<string, unknown> | null = null;
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-    const secret = process.env.INTERNAL_API_SECRET ?? "";
-    const previewRes = await fetch(`${backendUrl}/api/jobs/validate-url`, {
+    const previewRes = await backendFetch("/api/jobs/validate-url", userId, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Secret": secret,
-        "X-Internal-User-ID": userId,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: career_page_url.trim() }),
       signal: AbortSignal.timeout(20_000),
     });

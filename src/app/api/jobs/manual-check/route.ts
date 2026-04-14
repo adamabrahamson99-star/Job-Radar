@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/route-auth";
 import { MANUAL_CHECK_MONTHLY_LIMIT } from "@/lib/tier";
+import { backendFetch } from "@/lib/backend-fetch";
 
 /**
  * Kicks off a background job check via FastAPI and returns a job_id immediately.
@@ -69,17 +70,10 @@ export async function POST(req: NextRequest) {
     : 999;
 
   // Fire the background check — FastAPI returns a job_id immediately
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
-
   try {
-    const resp = await fetch(`${apiUrl}/api/jobs/run-check`, {
+    const resp = await backendFetch("/api/jobs/run-check", userId, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-User-ID": userId,
-        "X-Internal-Secret": internalSecret,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId }),
       signal: AbortSignal.timeout(10000),
     });

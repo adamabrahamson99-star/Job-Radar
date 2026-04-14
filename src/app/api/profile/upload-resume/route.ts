@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/route-auth";
+import { backendFetch, getInternalSecret } from "@/lib/backend-fetch";
 
 /**
  * Proxy for the FastAPI resume upload endpoint.
@@ -12,10 +13,8 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth();
   if (auth instanceof NextResponse) return auth;
   const { userId } = auth;
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
 
-  if (!internalSecret) {
+  if (!getInternalSecret()) {
     console.error("[upload-resume proxy] INTERNAL_API_SECRET is not set");
     return NextResponse.json(
       { error: "Server configuration error" },
@@ -28,13 +27,9 @@ export async function POST(req: NextRequest) {
 
   let fastapiRes: Response;
   try {
-    fastapiRes = await fetch(`${apiUrl}/api/profile/upload-resume`, {
+    fastapiRes = await backendFetch("/api/profile/upload-resume", userId, {
       method: "POST",
       body: formData,
-      headers: {
-        "X-Internal-User-ID": userId,
-        "X-Internal-Secret": internalSecret,
-      },
     });
   } catch (err) {
     console.error("[upload-resume proxy] FastAPI unreachable:", err);

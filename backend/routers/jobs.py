@@ -12,8 +12,6 @@ from auth_utils import get_user_id_from_request
 
 router = APIRouter()
 
-MONTHLY_LIMIT = 3
-
 
 @router.post("/validate-url")
 async def validate_career_url(request: Request):

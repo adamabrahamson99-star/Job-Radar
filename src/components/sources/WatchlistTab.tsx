@@ -5,16 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/utils";
 import { TIER_COMPANY_LIMITS } from "@/lib/tier";
-
-interface Company {
-  id: string;
-  company_name: string;
-  career_page_url: string;
-  is_active: boolean;
-  last_checked_at: string | null;
-  posting_count: number;
-  created_at: string;
-}
+import type { Company } from "@/types/companies";
 
 function RelativeTime({ iso }: { iso: string | null }) {
   if (!iso) return <span className="text-text-muted">Never</span>;
