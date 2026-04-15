@@ -876,7 +876,7 @@ def _build_job_dict(vr: dict, company_name: str) -> dict:
         "apply_url":       vr["url"],
         "location":        vr["extracted_location"],
         "description":     description,
-        "salary_raw":      None,
+        "salary_raw":      vr.get("extracted_salary_raw"),
         "salary_min":      None,
         "salary_max":      None,
         "salary_currency": None,

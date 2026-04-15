@@ -10,6 +10,7 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -83,6 +84,9 @@ class CandidateSignals(TypedDict):
     accept:                      bool
     rejection_reason:            str | None   # None if accepted
 
+    # ── Extracted salary (from JSON-LD when available) ───────────────────────
+    extracted_salary_raw:        str | None
+
     # ── Operational metadata ──────────────────────────────────────────────────
     fetched_at:                  str | None   # ISO 8601 UTC
     http_status:                 int | None
@@ -122,6 +126,7 @@ def _make_failed_result(
         "needs_review":                False,
         "accept":                      False,
         "rejection_reason":            error_type,
+        "extracted_salary_raw":        None,
         "fetched_at":                  datetime.now(timezone.utc).isoformat(),
         "http_status":                 http_status,
         "final_url":                   None,
@@ -171,6 +176,95 @@ async def _fetch_with_retry(
             else:
                 raise
     return None
+
+
+# ─── JSON-LD extraction (primary source for SPA sites) ───────────────────────
+
+def _extract_from_jsonld(html: str) -> dict:
+    """
+    Extract structured job data from JSON-LD JobPosting blocks embedded in static
+    HTML. This is the primary extraction method for SPA career sites (HPE, Intuit,
+    etc.) where the visible page body is a JavaScript shell but the JSON-LD is
+    server-rendered and fully present in the raw HTML response.
+
+    Returns a dict with keys: description, location, salary_raw.
+    All values are None if not found.
+    """
+    for block_match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(block_match.group(1))
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                for candidate in [item] + item.get("@graph", []):
+                    if candidate.get("@type") != "JobPosting":
+                        continue
+
+                    # ── Description ──────────────────────────────────────────
+                    raw_desc = candidate.get("description", "")
+                    clean_desc: str | None = None
+                    if raw_desc:
+                        # Strip HTML tags that may be embedded in the description
+                        stripped = re.sub(r"<[^>]+>", " ", str(raw_desc))
+                        stripped = re.sub(r"\s+", " ", stripped).strip()
+                        # Keep up to 2000 chars — enough for Claude to score well
+                        if len(stripped) >= 50:
+                            clean_desc = stripped[:2000]
+
+                    # ── Location ─────────────────────────────────────────────
+                    location: str | None = None
+                    remote = candidate.get("jobLocationType", "")
+                    if "remote" in str(remote).lower():
+                        location = "Remote"
+                    else:
+                        job_loc = candidate.get("jobLocation")
+                        if job_loc:
+                            if isinstance(job_loc, list):
+                                job_loc = job_loc[0] if job_loc else None
+                            if isinstance(job_loc, dict):
+                                address = job_loc.get("address", {})
+                                if isinstance(address, str):
+                                    location = address.strip() or None
+                                elif isinstance(address, dict):
+                                    parts: list[str] = []
+                                    city    = address.get("addressLocality", "")
+                                    region  = address.get("addressRegion", "")
+                                    country = address.get("addressCountry", "")
+                                    if city:
+                                        parts.append(city)
+                                    if region and region != city:
+                                        parts.append(region)
+                                    if country and country not in ("US", "USA", "United States"):
+                                        parts.append(country)
+                                    location = ", ".join(parts) if parts else None
+
+                    # ── Salary ───────────────────────────────────────────────
+                    salary_raw: str | None = None
+                    base_salary = candidate.get("baseSalary", {})
+                    if isinstance(base_salary, dict):
+                        value    = base_salary.get("value", {})
+                        currency = base_salary.get("currency", "")
+                        if isinstance(value, dict):
+                            min_v = value.get("minValue")
+                            max_v = value.get("maxValue")
+                            if min_v and max_v:
+                                salary_raw = f"{currency}{min_v}–{max_v}"
+                        elif isinstance(value, (int, float)):
+                            salary_raw = f"{currency}{value}"
+
+                    # Return on the first JobPosting block that has useful data
+                    if clean_desc or location:
+                        return {
+                            "description": clean_desc,
+                            "location":    location,
+                            "salary_raw":  salary_raw,
+                        }
+        except Exception:
+            continue
+
+    return {"description": None, "location": None, "salary_raw": None}
 
 
 # ─── Signal extraction ────────────────────────────────────────────────────────
@@ -267,7 +361,13 @@ def _extract_signals(html: str, url: str, known_templates: set[str]) -> dict:
     """
     Extract all boolean signals from the fetched HTML in a single pass.
     Returns a plain dict — callers convert to CandidateSignals fields.
+
+    JSON-LD is checked first (server-rendered on SPA sites like HPE/Intuit).
+    Regex/DOM extraction is used as fallback for non-SPA sites.
     """
+    # ── JSON-LD (primary source for description + location) ───────────────────
+    jsonld = _extract_from_jsonld(html)
+
     # ── Content signals ───────────────────────────────────────────────────────
     has_apply_signal = bool(re.search(
         r"<(button|a)[^>]*>\s*(apply|apply now|apply for this job|apply here)\s*</(button|a)>",
@@ -314,9 +414,10 @@ def _extract_signals(html: str, url: str, known_templates: set[str]) -> dict:
     has_single_job_focus = job_link_count < 8
 
     # ── Extracted content ─────────────────────────────────────────────────────
-    extracted_title    = _extract_title(html)
-    extracted_location = _extract_location(html)
-    extracted_description = _extract_description(html)
+    # JSON-LD is the authoritative source for SPA sites; regex/DOM is fallback.
+    extracted_title       = _extract_title(html)
+    extracted_location    = jsonld["location"]    or _extract_location(html)
+    extracted_description = jsonld["description"] or _extract_description(html)
 
     has_job_title = (
         extracted_title is not None
@@ -325,6 +426,7 @@ def _extract_signals(html: str, url: str, known_templates: set[str]) -> dict:
     )
 
     return {
+        "extracted_salary_raw": jsonld["salary_raw"],
         "extracted_title":             extracted_title,
         "extracted_location":          extracted_location,
         "extracted_description":       extracted_description,
@@ -502,6 +604,8 @@ async def _validate_one(
         # Decision
         "accept":           accepted,
         "rejection_reason": reason,
+        # Extracted salary (from JSON-LD when available)
+        "extracted_salary_raw": signals.get("extracted_salary_raw"),
         # Operational metadata
         "fetched_at":             fetched_at,
         "http_status":            http_status,

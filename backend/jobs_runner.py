@@ -152,10 +152,26 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                 all_jobs = matched_jobs + unmatched_jobs
 
                 new_count = 0
-                live_ids: set[str] = set()
+
+                # Pre-seed live_ids with fingerprints of every currently active
+                # posting for this company. This prevents the Tier 4 URL cache
+                # from triggering false takedowns: when a valid URL is skipped
+                # because it was recently validated, its job would otherwise be
+                # absent from live_ids and incorrectly marked as is_active=false.
+                from pipeline import make_fingerprint
+                try:
+                    _active_rows = db.execute(
+                        text(
+                            "SELECT external_id FROM job_postings "
+                            "WHERE user_id = :uid AND company_id = :cid AND is_active = true"
+                        ),
+                        {"uid": user_id, "cid": company.id},
+                    ).fetchall()
+                    live_ids: set[str] = {row.external_id for row in _active_rows}
+                except Exception:
+                    live_ids = set()  # fail open — better than wrongly deactivating
 
                 for raw in all_jobs:
-                    from pipeline import make_fingerprint
                     fp = make_fingerprint(company.company_name, raw.get("title", ""), raw.get("apply_url", ""))
                     live_ids.add(fp)
                     is_new = ingest_posting(
