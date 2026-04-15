@@ -45,6 +45,14 @@ _NAV_PATH_SEGMENTS = {
     "team", "culture", "benefits", "faq", "help", "login", "register",
 }
 
+# Path segments that identify listing/search/category pages.
+# Distinct from _NAV_PATH_SEGMENTS (which catches nav pages).
+# These catch listing pages that survive domain and nav filtering.
+_LISTING_PATH_SEGMENTS = {
+    "search", "filter", "category", "categories", "department", "departments",
+    "results", "browse", "explore", "all-jobs", "job-search",
+}
+
 # Cookie / consent overlay selectors
 _OVERLAY_SELECTORS = [
     "#onetrust-accept-btn-handler",
@@ -155,6 +163,10 @@ def _is_candidate_link(href: str, text: str, base_url: str) -> bool:
 
     segments = [s.lower() for s in path.split("/") if s]
     if any(seg in _NAV_PATH_SEGMENTS for seg in segments):
+        return False
+
+    # Tier 1 pre-filter: reject known listing/search/category page path segments
+    if any(seg in _LISTING_PATH_SEGMENTS for seg in segments):
         return False
 
     return True
@@ -849,18 +861,56 @@ async def _try_get_location_near_link(link_locator) -> str | None:
     return None
 
 
+# ─── Job dict builder ─────────────────────────────────────────────────────────
+
+def _build_job_dict(vr: dict, company_name: str) -> dict:
+    """Build a raw job dict from a validated CandidateSignals result."""
+    title = vr["extracted_title"] or vr["anchor_text"]
+    description = vr["extracted_description"] or (
+        f"{title} at {company_name}. "
+        "Visit the job posting for the full description and requirements."
+    )
+    return {
+        "title":           title,
+        "company_name":    company_name,
+        "apply_url":       vr["url"],
+        "location":        vr["extracted_location"],
+        "description":     description,
+        "salary_raw":      None,
+        "salary_min":      None,
+        "salary_max":      None,
+        "salary_currency": None,
+        "posted_at":       None,
+    }
+
+
 # ─── Main scraper ─────────────────────────────────────────────────────────────
 
-async def scrape_career_page(url: str, company_name: str) -> list[dict]:
+async def scrape_career_page(
+    url: str,
+    company_name: str,
+    skip_urls: set[str] | None = None,
+    skip_domains: set[str] | None = None,
+) -> tuple[list[dict], list[dict]]:
     """
     Navigate to a company's career page and extract all job listings.
 
-    Detection runs through five layers (see module docstring).
-    Pagination is handled via URL-pattern httpx fetching or load-more clicking.
-    No cap on job collection — title pre-filtering in pipeline.py controls cost.
+    Detection runs through five layers (see module docstring). Each candidate
+    URL is validated by validator.py before being accepted as a job posting.
+
+    Args:
+        url:          Career page URL to scrape.
+        company_name: Human-readable company name (used in logging + job dicts).
+        skip_urls:    Normalised URLs to skip (already in the validation cache).
+        skip_domains: Domains currently in backoff (from domain health check).
+
+    Returns:
+        (accepted_jobs, all_validation_results) — caller writes cache + health.
     """
     results: list[dict] = []
     detection_method = "none"
+    validation_results: list[dict] = []
+    discovered_by_map: dict[str, str] = {}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -947,10 +997,14 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
                 )
                 job_url_set = {u for u, _ in cluster_result["links"]}
                 known_templates: set[str] = cluster_result["templates"]
+                for url_item, _ in cluster_result["links"]:
+                    discovered_by_map.setdefault(url_item, "cluster")
 
                 # Layer 3 — DOM parent structure analysis
                 dom_urls = await _dom_cluster_links(raw_candidates)
                 job_url_set |= dom_urls
+                for url_item in dom_urls:
+                    discovered_by_map.setdefault(url_item, "dom")
 
                 # Layer 4 — is_child_of_base supplement
                 # Only add URLs that match the cluster templates already established by
@@ -967,6 +1021,7 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
                         if base_path and candidate_path.startswith(base_path + "/"):
                             if not known_templates or _url_template(candidate_path) in known_templates:
                                 job_url_set.add(full_url)
+                                discovered_by_map.setdefault(full_url, "base_path")
 
                 # Layer 5 — Content sampling validation
                 sample = [u for u in list(job_url_set)[:3]]
@@ -990,39 +1045,56 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
                             seen_urls.add(href)
                             job_url_set.add(href)
                             raw_candidates.append((href, text, None))
+                            discovered_by_map.setdefault(href, "pagination")
 
-            # ── 7. Build result dicts ─────────────────────────────────────────
-            for full_url, text, link in raw_candidates:
+            # ── 7. Validate candidates and build job dicts ────────────────────
+            # Lazy imports: validator imports _url_template from this module, so
+            # importing at module level would create a circular import.
+            from validator import validate_candidates as _validate_candidates
+            from scrape_cache import normalize_url as _normalize_url
+
+            skip_url_normalized = skip_urls or set()
+            skip_domain_set     = skip_domains or set()
+
+            candidates_to_validate: list[tuple[str, str, str]] = []
+            for full_url, text, _ in raw_candidates:
                 if full_url not in job_url_set:
                     continue
-
-                # Reject category/department listing pages whose link text contains
-                # a job count (e.g. "Engineering & QA565 available jobs").
+                # Tier 2: anchor text — reject category listing page link text
                 if _CATEGORY_TITLE_RE.search(text):
-                    print(f"[SCRAPER] {company_name}: skipping category page — {text!r}")
+                    print(f"[SCRAPER] {company_name}: pre-filter anchor — {text!r}")
                     continue
+                # Tier 3: domain health — skip domains in backoff
+                domain = urlparse(full_url).netloc
+                if domain in skip_domain_set:
+                    print(f"[SCRAPER] {company_name}: pre-filter domain health — {domain}")
+                    continue
+                # Tier 4: URL cache dedup — skip already-validated URLs
+                if _normalize_url(full_url) in skip_url_normalized:
+                    print(f"[SCRAPER] {company_name}: pre-filter cache hit — {full_url}")
+                    continue
+                candidates_to_validate.append((
+                    full_url,
+                    text,
+                    discovered_by_map.get(full_url, "cluster"),
+                ))
 
-                location = jsonld_location_map.get(full_url)
-                if not location and link is not None:
-                    location = await _try_get_location_near_link(link)
+            if candidates_to_validate:
+                validation_results = await _validate_candidates(
+                    candidates_to_validate,
+                    known_templates=known_templates,
+                )
+                for vr in validation_results:
+                    print(
+                        f"[VALIDATOR] {company_name} | {vr['page_type_guess']} | "
+                        f"score={vr['score']} accept={vr['accept']} | "
+                        f"reason={vr['rejection_reason']} | {vr['url']}"
+                    )
+                    if not vr["accept"]:
+                        continue
+                    results.append(_build_job_dict(vr, company_name))
 
-                results.append({
-                    "title": text,
-                    "company_name": company_name,
-                    "apply_url": full_url,
-                    "location": location,
-                    "description": (
-                        f"{text} at {company_name}. "
-                        "Visit the job posting for the full description and requirements."
-                    ),
-                    "salary_raw": None,
-                    "salary_min": None,
-                    "salary_max": None,
-                    "salary_currency": None,
-                    "posted_at": None,
-                })
-
-            # Add any JSON-LD jobs not found via link crawl
+            # JSON-LD jobs bypass the validator — add any not already in results
             crawled_urls = {r["apply_url"] for r in results}
             for j in jsonld_jobs:
                 if j["apply_url"] not in crawled_urls:
@@ -1053,7 +1125,7 @@ async def scrape_career_page(url: str, company_name: str) -> list[dict]:
         f"[SCRAPER] {company_name}: {len(deduped)} postings "
         f"(method={detection_method}) at {url}"
     )
-    return deduped
+    return deduped, validation_results
 
 
 # ─── Lightweight preview (used at company-add time) ───────────────────────────

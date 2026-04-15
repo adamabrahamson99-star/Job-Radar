@@ -93,9 +93,45 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                     job_source = ats_source          # "GREENHOUSE" | "LEVER" | "ASHBY"
                     needs_enrichment = False
                 else:
-                    raw_jobs = await scrape_career_page(company.career_page_url, company.company_name)
+                    from scrape_cache import (
+                        write_url_cache_batch,
+                        normalize_url as _normalize_url,
+                    )
+                    from domain_health import (
+                        load_domain_health,
+                        compute_domain_health_updates,
+                        write_domain_health_updates,
+                    )
+                    from urllib.parse import urlparse as _urlparse
+
+                    career_url    = company.career_page_url
+                    career_domain = _urlparse(career_url).netloc
+
+                    # Tier 3: domain health — load backoff set for this domain
+                    domains_in_backoff = load_domain_health(db, {career_domain})
+
+                    # Tier 4: URL cache dedup — load normalised URLs already validated
+                    # for this company so the scraper can skip them as pre-filters.
+                    try:
+                        cached_rows = db.execute(
+                            text(
+                                "SELECT normalized_url FROM scrape_url_cache "
+                                "WHERE company_name = :cn AND expires_at > NOW()"
+                            ),
+                            {"cn": company.company_name},
+                        ).fetchall()
+                        cached_normalized_urls = {row.normalized_url for row in cached_rows}
+                    except Exception:
+                        cached_normalized_urls = set()
+
+                    raw_jobs, _watchlist_validation_results = await scrape_career_page(
+                        career_url,
+                        company.company_name,
+                        skip_urls=cached_normalized_urls,
+                        skip_domains=domains_in_backoff,
+                    )
                     job_source = "WATCHLIST"
-                    needs_enrichment = True
+                    needs_enrichment = True  # _enrich_locations skips jobs that already have location
 
                 # ── Title pre-filter before location enrichment ───────────────
                 # Only fire HTTP location requests for scraper jobs that matched
@@ -146,6 +182,14 @@ async def _check_user_jobs_async(user_id: str) -> dict:
                 )
                 db.commit()
                 total_new += new_count
+
+                # Persist URL validation cache + domain health for watchlist companies.
+                # Both writes degrade gracefully (log + rollback) so a DB hiccup here
+                # never fails the scrape run.
+                if not (ats_source and ats_slug):
+                    write_url_cache_batch(db, _watchlist_validation_results, company.company_name)
+                    domain_updates = compute_domain_health_updates(_watchlist_validation_results)
+                    write_domain_health_updates(db, domain_updates)
 
             except Exception as e:
                 errors.append(f"Watchlist check error ({company.company_name}): {e}")
