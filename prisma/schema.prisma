@@ -200,3 +200,32 @@ model NotificationPreferences {
 
   @@map("notification_preferences")
 }
+
+model ScrapeUrlCache {
+  url_hash           String   @id
+  normalized_url     String
+  company_name       String
+  result             String                    // "accepted" | "rejected" | "error"
+  page_type_guess    String?
+  score              Int?
+  rejection_reason   String?
+  http_status        Int?
+  extracted_title    String?
+  extracted_location String?
+  validated_at       DateTime @default(now())
+  expires_at         DateTime
+
+  @@index([expires_at])
+  @@map("scrape_url_cache")
+}
+
+model ScrapeDomainHealth {
+  domain               String    @id
+  consecutive_failures Int       @default(0)
+  failure_reason       String?
+  backoff_until        DateTime?
+  last_success_at      DateTime?
+  last_checked_at      DateTime  @default(now())
+
+  @@map("scrape_domain_health")
+}
