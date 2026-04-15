@@ -447,16 +447,45 @@ export default function DashboardPage() {
   const handleManualCheck = async () => {
     setCheckRunning(true);
     try {
+      // Step 1: fire the check — FastAPI starts it in the background and
+      // immediately returns a job_id. The check takes 20–60s to complete.
       const res = await fetch("/api/jobs/manual-check", { method: "POST" });
       const data = await res.json();
-      if (res.ok) {
-        setChecksRemaining(data.checks_remaining ?? 0);
-        // Refresh everything
-        await Promise.all([fetchJobs(filters, 1), fetchStats()]);
-        setPage(1);
-      } else if (res.status === 429) {
-        setChecksRemaining(0);
+
+      if (!res.ok) {
+        if (res.status === 429) setChecksRemaining(0);
+        return;
       }
+
+      setChecksRemaining(data.checks_remaining ?? 0);
+
+      // Step 2: poll /api/jobs/check-status/{job_id} every 2s until the
+      // background check finishes. The spinner stays active throughout.
+      const jobId: string | undefined = data.job_id;
+      if (jobId) {
+        let done = false;
+        while (!done) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          try {
+            const statusRes = await fetch(`/api/jobs/check-status/${jobId}`);
+            const statusData = await statusRes.json();
+            if (
+              statusData.status === "complete" ||
+              statusData.status === "error" ||
+              statusData.status === "lost"
+            ) {
+              done = true;
+            }
+          } catch {
+            // Network error while polling — stop and refresh anyway
+            done = true;
+          }
+        }
+      }
+
+      // Step 3: check is done — now refresh the feed and stats
+      await Promise.all([fetchJobs(filters, 1), fetchStats()]);
+      setPage(1);
     } finally {
       setCheckRunning(false);
     }
