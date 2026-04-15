@@ -365,7 +365,11 @@ def _accept(s: dict, score: int) -> tuple[bool, str | None]:
         return False, f"page_type={s['page_type_guess']}"
     if not s["has_job_title"]:
         return False, "no_job_title"
-    if not s["has_apply_signal"]:
+    # JSON-LD JobPosting schema is an unambiguous machine-readable declaration that
+    # this page IS a job posting — treat it as equivalent to finding an apply button.
+    # This handles SPA career sites (e.g. HPE) where the apply button is JS-rendered
+    # but the structured data is present in static HTML.
+    if not s["has_apply_signal"] and not s["has_structured_schema"]:
         return False, "no_apply_signal"
     if not (s["has_qualifications_signal"] or s["has_responsibilities_signal"]):
         return False, "no_body_content_signal"
