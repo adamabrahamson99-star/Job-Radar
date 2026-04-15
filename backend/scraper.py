@@ -118,7 +118,15 @@ def _normalize_domain(url: str) -> str:
 def _is_same_domain(link_url: str, base_url: str) -> bool:
     base = _normalize_domain(base_url)
     link = _normalize_domain(link_url)
-    return base in link or link in base
+    # Exact match (same subdomain, e.g. careers.hpe.com == careers.hpe.com)
+    if base == link:
+        return True
+    # Link is a subdomain of base (e.g. base=hpe.com, link=careers.hpe.com)
+    if link.endswith("." + base):
+        return True
+    # NOTE: intentionally NOT allowing the reverse (base=careers.hpe.com, link=hpe.com)
+    # because that would let www.hpe.com links pass when scraping careers.hpe.com.
+    return False
 
 
 def _is_candidate_link(href: str, text: str, base_url: str) -> bool:
@@ -220,6 +228,17 @@ def _cluster_job_links(
     for threshold in (min_cluster_size, 2):
         matched = [links for links in groups.values() if len(links) >= threshold]
         if matched:
+            # Prefer clusters whose URL template contains a numeric {id} segment.
+            # Real job postings (e.g. /job/1198238/Senior-Engineer) have an ID;
+            # category/department pages (e.g. /c/engineering-qa-jobs) do not.
+            # If any ID-bearing clusters exist, discard the slug-only ones entirely.
+            id_clusters = [
+                links for links in matched
+                if "{id}" in _url_template(urlparse(links[0][0]).path.rstrip("/"))
+            ]
+            if id_clusters:
+                matched = id_clusters
+
             result_links: list[tuple[str, str]] = []
             result_templates: set[str] = set()
             for cluster_links in matched:
